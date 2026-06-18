@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect, useRef, useTransition } from 'react'
-import { Plus, Search, Trash2, Archive, ArchiveRestore } from 'lucide-react'
+import { useState, useEffect, useRef, useTransition, forwardRef, useImperativeHandle } from 'react'
+import { Plus, Search, Trash2, Archive, ArchiveRestore, Download } from 'lucide-react'
 import { SidePanel, Field, Input, Select, Button, Badge, EmptyState, useToast } from '@/components/ui'
 import { formatARS, formatPercent, formatDate } from '@/lib/utils/format'
+import { exportToExcel } from '@/lib/utils/export'
 import {
   getProductosConMetricas,
   getProductoCompleto,
@@ -34,7 +35,9 @@ type CostoCalc = {
   beneficio: number; detalle: CostoDetalle[];
 }
 
-export default function ProductosTab() {
+export type ProductosTabHandle = { reload: () => void }
+
+const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref) {
   const [productos, setProductos] = useState<ProductoConMetricas[]>([])
   const [ingredientes, setIngredientes] = useState<IngredienteMin[]>([])
   const [loaded, setLoaded] = useState(false)
@@ -50,6 +53,14 @@ export default function ProductosTab() {
   const requestId = useRef(0)
 
   useEffect(() => { loadProductos(); loadIngredientes() }, [])
+
+  // Exponer reload al padre para sincronización cross-tab
+  useImperativeHandle(ref, () => ({
+    reload() {
+      loadProductos()
+      loadIngredientes()
+    }
+  }))
 
   async function loadProductos() {
     const thisRequest = ++requestId.current
@@ -72,8 +83,6 @@ export default function ProductosTab() {
     setDetalle(d as any)
     setCostoCalc(c as any)
   }
-
-  // ─── Handlers: mutación → recarga directa ───
 
   async function handleCrear(fd: FormData) {
     startTransition(async () => {
@@ -164,6 +173,20 @@ export default function ProductosTab() {
     loadDetalle(id)
   }
 
+  function handleExport() {
+    const catLabels: Record<string, string> = {
+      hamburguesa: 'Hamburguesa', acompanamiento: 'Acompañamiento', bebida: 'Bebida', combo: 'Combo',
+    }
+    exportToExcel(filtrados, [
+      { key: 'nombre', header: 'Producto' },
+      { key: 'categoria', header: 'Categoría', format: (v: string) => catLabels[v] ?? v },
+      { key: 'precio_vigente', header: 'Precio Venta ($)', format: (v: number | null) => v ?? 'Sin precio' },
+      { key: 'costo_calculado', header: 'Costo ($)', format: (v: number | null) => v != null ? Math.round(v) : 'Sin receta' },
+      { key: 'margen', header: 'Margen (%)', format: (v: number | null) => v != null ? Number(v.toFixed(1)) : '—' },
+      { key: 'activo', header: 'Estado', format: (v: boolean) => v ? 'Activo' : 'Inactivo' },
+    ], 'Productos_Royalty')
+  }
+
   const catLabels: Record<string, string> = {
     hamburguesa: 'Hamburguesa', acompanamiento: 'Acompañamiento', bebida: 'Bebida', combo: 'Combo',
   }
@@ -183,9 +206,16 @@ export default function ProductosTab() {
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
           <Input placeholder="Buscar producto..." value={filtro} onChange={(e) => setFiltro(e.target.value)} className="pl-9 !w-64" />
         </div>
-        <Button onClick={() => setShowNew(true)}>
-          <Plus className="w-4 h-4" /> Nuevo producto
-        </Button>
+        <div className="flex items-center gap-2">
+          {showTable && (
+            <Button variant="secondary" onClick={handleExport}>
+              <Download className="w-4 h-4" /> Exportar
+            </Button>
+          )}
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="w-4 h-4" /> Nuevo producto
+          </Button>
+        </div>
       </div>
 
       {showLoading && (
@@ -234,11 +264,7 @@ export default function ProductosTab() {
                     <Badge color={p.activo ? 'green' : 'gray'}>{p.activo ? 'Activo' : 'Inactivo'}</Badge>
                   </td>
                   <td className="px-2 py-3">
-                    <button
-                      onClick={(e) => { e.stopPropagation(); handleToggleActivo(p) }}
-                      title={p.activo ? 'Archivar' : 'Reactivar'}
-                      className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors"
-                    >
+                    <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(p) }} title={p.activo ? 'Archivar' : 'Reactivar'} className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
                       {p.activo ? <Archive className="w-4 h-4" /> : <ArchiveRestore className="w-4 h-4" />}
                     </button>
                   </td>
@@ -249,17 +275,11 @@ export default function ProductosTab() {
         </div>
       )}
 
-      {/* Panel crear */}
       <SidePanel open={showNew} onClose={() => setShowNew(false)} title="Nuevo producto">
         <FormProducto onSubmit={handleCrear} pending={pending} isNew />
       </SidePanel>
 
-      {/* Panel detalle */}
-      <SidePanel
-        open={!!selectedId}
-        onClose={() => { setSelectedId(null); setDetalle(null); setCostoCalc(null) }}
-        title={detalle?.producto?.nombre ?? 'Cargando...'}
-      >
+      <SidePanel open={!!selectedId} onClose={() => { setSelectedId(null); setDetalle(null); setCostoCalc(null) }} title={detalle?.producto?.nombre ?? 'Cargando...'}>
         {detalle?.producto && (
           <div className="space-y-8">
             {costoCalc && costoCalc.costo != null && (
@@ -278,91 +298,58 @@ export default function ProductosTab() {
                 </div>
               </div>
             )}
-
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Datos del producto</h3>
               <FormProducto key={detalle.producto.id} onSubmit={handleActualizar} pending={pending} initial={detalle.producto} />
             </div>
-
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Historial de precios</h3>
               {detalle.precios.length > 0 ? (
                 <div className="space-y-1.5 mb-4">
                   {detalle.precios.map((p: PrecioHist, i: number) => (
                     <div key={p.id} className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${i === 0 ? 'bg-brand-light font-medium' : 'bg-surface-alt'}`}>
-                      <span>{formatDate(p.fecha_vigencia)}</span>
-                      <span>{formatARS(p.precio)}</span>
+                      <span>{formatDate(p.fecha_vigencia)}</span><span>{formatARS(p.precio)}</span>
                     </div>
                   ))}
                 </div>
-              ) : (
-                <p className="text-sm text-text-muted mb-4">Sin precios registrados.</p>
-              )}
+              ) : (<p className="text-sm text-text-muted mb-4">Sin precios registrados.</p>)}
               <form action={handleNuevoPrecio} className="flex items-end gap-2">
-                <Field label="Nuevo precio">
-                  <Input name="precio" type="number" min="0" step="1" required placeholder="0" />
-                </Field>
-                <Field label="Desde">
-                  <Input name="fecha" type="date" required defaultValue={new Date().toISOString().split('T')[0]} />
-                </Field>
+                <Field label="Nuevo precio"><Input name="precio" type="number" min="0" step="1" required placeholder="0" /></Field>
+                <Field label="Desde"><Input name="fecha" type="date" required defaultValue={new Date().toISOString().split('T')[0]} /></Field>
                 <Button type="submit" disabled={pending} size="md">Agregar</Button>
               </form>
             </div>
-
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Receta</h3>
               {costoCalc?.detalle && costoCalc.detalle.length > 0 ? (
                 <div className="bg-surface-alt rounded-lg overflow-hidden mb-4">
                   <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b border-border">
-                        <th className="text-left px-3 py-2 text-xs text-text-muted">Ingrediente</th>
-                        <th className="text-right px-3 py-2 text-xs text-text-muted">Cant.</th>
-                        <th className="text-right px-3 py-2 text-xs text-text-muted">Costo</th>
-                        <th className="w-8"></th>
-                      </tr>
-                    </thead>
+                    <thead><tr className="border-b border-border"><th className="text-left px-3 py-2 text-xs text-text-muted">Ingrediente</th><th className="text-right px-3 py-2 text-xs text-text-muted">Cant.</th><th className="text-right px-3 py-2 text-xs text-text-muted">Costo</th><th className="w-8"></th></tr></thead>
                     <tbody>
                       {costoCalc.detalle.map((d) => (
                         <tr key={d.receta_id} className="border-b border-border last:border-0">
                           <td className="px-3 py-2">{d.ingrediente_nombre}</td>
                           <td className="px-3 py-2 text-right text-text-secondary">{d.cantidad} {d.unidad_receta}</td>
                           <td className="px-3 py-2 text-right font-medium">{formatARS(d.costo_parcial)}</td>
-                          <td className="px-1 py-2">
-                            <button onClick={() => handleEliminarReceta(d.receta_id)} className="p-1 text-text-muted hover:text-negative">
-                              <Trash2 className="w-3.5 h-3.5" />
-                            </button>
-                          </td>
+                          <td className="px-1 py-2"><button onClick={() => handleEliminarReceta(d.receta_id)} className="p-1 text-text-muted hover:text-negative"><Trash2 className="w-3.5 h-3.5" /></button></td>
                         </tr>
                       ))}
-                      <tr className="bg-surface">
-                        <td className="px-3 py-2 font-semibold">Total</td>
-                        <td></td>
-                        <td className="px-3 py-2 text-right font-semibold">{formatARS(costoCalc.costo)}</td>
-                        <td></td>
-                      </tr>
+                      <tr className="bg-surface"><td className="px-3 py-2 font-semibold">Total</td><td></td><td className="px-3 py-2 text-right font-semibold">{formatARS(costoCalc.costo)}</td><td></td></tr>
                     </tbody>
                   </table>
                 </div>
-              ) : (
-                <p className="text-sm text-text-muted mb-4">Sin receta. Agregá ingredientes para calcular costos.</p>
-              )}
+              ) : (<p className="text-sm text-text-muted mb-4">Sin receta. Agregá ingredientes para calcular costos.</p>)}
               <form action={handleAgregarReceta} className="flex items-end gap-2">
                 <Field label="Ingrediente">
                   <Select name="ingrediente_id" required>
                     <option value="">Seleccionar...</option>
-                    {ingredientes.filter((i) => i.activo).map((i) => (
-                      <option key={i.id} value={i.id}>{i.nombre}</option>
-                    ))}
+                    {ingredientes.filter((i) => i.activo).map((i) => (<option key={i.id} value={i.id}>{i.nombre}</option>))}
                   </Select>
                 </Field>
-                <Field label="Cantidad">
-                  <Input name="cantidad" type="number" min="0.01" step="0.01" required placeholder="0" />
-                </Field>
+                <Field label="Cantidad"><Input name="cantidad" type="number" min="0.01" step="0.01" required placeholder="0" /></Field>
                 <Button type="submit" disabled={pending} size="md">Agregar</Button>
               </form>
             </div>
-
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Mapeo Pedix</h3>
               {detalle.aliases.length > 0 && (
@@ -370,17 +357,13 @@ export default function ProductosTab() {
                   {detalle.aliases.map((a: Alias) => (
                     <div key={a.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-alt text-sm">
                       <span className="text-text-secondary truncate mr-2">{a.nombre_pedix}</span>
-                      <button onClick={() => handleEliminarAlias(a.id)} className="p-1 text-text-muted hover:text-negative shrink-0">
-                        <Trash2 className="w-3.5 h-3.5" />
-                      </button>
+                      <button onClick={() => handleEliminarAlias(a.id)} className="p-1 text-text-muted hover:text-negative shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                     </div>
                   ))}
                 </div>
               )}
               <form action={handleAgregarAlias} className="flex items-end gap-2">
-                <Field label="Nombre en Pedix">
-                  <Input name="nombre_pedix" required placeholder='Ej: KING + Papas Fritas' />
-                </Field>
+                <Field label="Nombre en Pedix"><Input name="nombre_pedix" required placeholder='Ej: KING + Papas Fritas' /></Field>
                 <Button type="submit" disabled={pending} size="md">Agregar</Button>
               </form>
             </div>
@@ -391,33 +374,23 @@ export default function ProductosTab() {
       <Toast />
     </div>
   )
-}
+})
 
-function FormProducto({
-  onSubmit, pending, initial, isNew,
-}: {
+export default ProductosTab
+
+function FormProducto({ onSubmit, pending, initial, isNew }: {
   onSubmit: (fd: FormData) => void; pending: boolean; initial?: any; isNew?: boolean;
 }) {
   const [activo, setActivo] = useState(initial?.activo ?? true)
-
   return (
     <form action={onSubmit} className="space-y-4">
-      <Field label="Nombre">
-        <Input name="nombre" required defaultValue={initial?.nombre} placeholder="Ej: Royal Doble" />
-      </Field>
+      <Field label="Nombre"><Input name="nombre" required defaultValue={initial?.nombre} placeholder="Ej: Royal Doble" /></Field>
       <Field label="Categoría">
         <Select name="categoria" defaultValue={initial?.categoria ?? 'hamburguesa'}>
-          <option value="hamburguesa">Hamburguesa</option>
-          <option value="acompanamiento">Acompañamiento</option>
-          <option value="bebida">Bebida</option>
-          <option value="combo">Combo</option>
+          <option value="hamburguesa">Hamburguesa</option><option value="acompanamiento">Acompañamiento</option><option value="bebida">Bebida</option><option value="combo">Combo</option>
         </Select>
       </Field>
-      {isNew && (
-        <Field label="Precio de venta">
-          <Input name="precio" type="number" min="0" step="1" placeholder="0" />
-        </Field>
-      )}
+      {isNew && <Field label="Precio de venta"><Input name="precio" type="number" min="0" step="1" placeholder="0" /></Field>}
       {!isNew && (
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input type="hidden" name="activo" value="false" />
@@ -425,9 +398,7 @@ function FormProducto({
           Activo
         </label>
       )}
-      <Button type="submit" disabled={pending}>
-        {isNew ? 'Crear producto' : 'Guardar cambios'}
-      </Button>
+      <Button type="submit" disabled={pending}>{isNew ? 'Crear producto' : 'Guardar cambios'}</Button>
     </form>
   )
 }

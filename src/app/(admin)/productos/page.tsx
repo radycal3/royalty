@@ -1,12 +1,18 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Tabs } from '@/components/ui'
 import IngredientesTab from './IngredientesTab'
-import ProductosTab from './ProductosTab'
+import ProductosTab, { type ProductosTabHandle } from './ProductosTab'
 
 export default function ProductosPage() {
   const [tab, setTab] = useState('ingredientes')
+  const productosRef = useRef<ProductosTabHandle>(null)
+
+  // Cuando cambia un costo de ingrediente, ProductosTab debe recargarse
+  function handleIngredienteCostChange() {
+    productosRef.current?.reload()
+  }
 
   return (
     <div>
@@ -22,12 +28,11 @@ export default function ProductosPage() {
         />
       </div>
 
-      {/* Ambos montados siempre. hidden evita re-mount y re-fetch al cambiar tab */}
       <div className={tab !== 'ingredientes' ? 'hidden' : ''}>
-        <IngredientesTab />
+        <IngredientesTab onCostChange={handleIngredienteCostChange} />
       </div>
       <div className={tab !== 'productos' ? 'hidden' : ''}>
-        <ProductosTab />
+        <ProductosTab ref={productosRef} />
       </div>
     </div>
   )
