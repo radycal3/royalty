@@ -1,70 +1,79 @@
 'use client'
 
-import { useState, useEffect, useTransition } from 'react'
-import { Plus, Search, Trash2 } from 'lucide-react'
+import { useState, useEffect, useRef, useTransition } from 'react'
+import { Plus, Search, Trash2, Archive, ArchiveRestore } from 'lucide-react'
 import { SidePanel, Field, Input, Select, Button, Badge, EmptyState, useToast } from '@/components/ui'
 import { formatARS, formatPercent, formatDate } from '@/lib/utils/format'
 import {
-  getProductos,
+  getProductosConMetricas,
   getProductoCompleto,
   crearProducto,
   actualizarProducto,
   agregarPrecio,
   agregarItemReceta,
-  actualizarItemReceta,
   eliminarItemReceta,
   agregarAlias,
   eliminarAlias,
   calcularCostoProducto,
 } from './actions-productos'
-import { getIngredientes } from './actions-ingredientes'
+import { getIngredientesConCosto } from './actions-ingredientes'
 
-type Producto = { id: string; nombre: string; categoria: string; activo: boolean }
-type Ingrediente = { id: string; nombre: string; unidad_receta: string; factor_conversion: number; activo: boolean }
-type RecetaItem = {
-  id: string; ingrediente_id: string; cantidad: number;
-  ingredientes: Ingrediente
+type ProductoConMetricas = {
+  id: string; nombre: string; categoria: string; activo: boolean;
+  precio_vigente: number | null; costo_calculado: number | null; margen: number | null;
 }
+type IngredienteMin = { id: string; nombre: string; activo: boolean }
 type PrecioHist = { id: string; precio: number; fecha_vigencia: string }
 type Alias = { id: string; nombre_pedix: string }
 type CostoDetalle = {
   receta_id: string; ingrediente_nombre: string; unidad_receta: string;
-  cantidad: number; costo_por_unidad_receta: number; costo_parcial: number
+  cantidad: number; costo_por_unidad_receta: number; costo_parcial: number;
 }
 type CostoCalc = {
   costo: number | null; precio: number; margen: number;
-  beneficio: number; detalle: CostoDetalle[]
+  beneficio: number; detalle: CostoDetalle[];
 }
 
 export default function ProductosTab() {
-  const [productos, setProductos] = useState<Producto[]>([])
-  const [ingredientes, setIngredientes] = useState<Ingrediente[]>([])
+  const [productos, setProductos] = useState<ProductoConMetricas[]>([])
+  const [ingredientes, setIngredientes] = useState<IngredienteMin[]>([])
+  const [loaded, setLoaded] = useState(false)
   const [filtro, setFiltro] = useState('')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [detalle, setDetalle] = useState<{
-    producto: Producto; precios: PrecioHist[];
-    receta: RecetaItem[]; aliases: Alias[]
+    producto: any; precios: PrecioHist[]; receta: any[]; aliases: Alias[];
   } | null>(null)
   const [costoCalc, setCostoCalc] = useState<CostoCalc | null>(null)
   const [showNew, setShowNew] = useState(false)
   const [pending, startTransition] = useTransition()
   const { show, Toast } = useToast()
+  const requestId = useRef(0)
 
   useEffect(() => { loadProductos(); loadIngredientes() }, [])
 
-  useEffect(() => {
-    if (selectedId) loadDetalle(selectedId)
-  }, [selectedId])
+  async function loadProductos() {
+    const thisRequest = ++requestId.current
+    const data = await getProductosConMetricas()
+    if (thisRequest === requestId.current) {
+      setProductos(data)
+      setLoaded(true)
+    }
+  }
 
-  async function loadProductos() { setProductos(await getProductos()) }
-  async function loadIngredientes() { setIngredientes(await getIngredientes()) }
+  async function loadIngredientes() {
+    setIngredientes(await getIngredientesConCosto())
+  }
 
   async function loadDetalle(id: string) {
-    const d = await getProductoCompleto(id)
+    const [d, c] = await Promise.all([
+      getProductoCompleto(id),
+      calcularCostoProducto(id),
+    ])
     setDetalle(d as any)
-    const c = await calcularCostoProducto(id)
     setCostoCalc(c as any)
   }
+
+  // ─── Handlers: mutación → recarga directa ───
 
   async function handleCrear(fd: FormData) {
     startTransition(async () => {
@@ -82,8 +91,7 @@ export default function ProductosTab() {
       const r = await actualizarProducto(selectedId, fd)
       if (r.error) { show(r.error, 'error'); return }
       show('Producto actualizado')
-      await loadProductos()
-      await loadDetalle(selectedId)
+      await Promise.all([loadProductos(), loadDetalle(selectedId)])
     })
   }
 
@@ -93,7 +101,7 @@ export default function ProductosTab() {
       const r = await agregarPrecio(selectedId, fd)
       if (r.error) { show(r.error, 'error'); return }
       show('Precio actualizado')
-      await loadDetalle(selectedId)
+      await Promise.all([loadProductos(), loadDetalle(selectedId)])
     })
   }
 
@@ -103,16 +111,17 @@ export default function ProductosTab() {
       const r = await agregarItemReceta(selectedId, fd)
       if (r.error) { show(r.error, 'error'); return }
       show('Ingrediente agregado a la receta')
-      await loadDetalle(selectedId)
+      await Promise.all([loadProductos(), loadDetalle(selectedId)])
     })
   }
 
   async function handleEliminarReceta(recetaId: string) {
+    if (!selectedId) return
     startTransition(async () => {
       const r = await eliminarItemReceta(recetaId)
       if (r.error) { show(r.error, 'error'); return }
       show('Ingrediente eliminado de la receta')
-      if (selectedId) await loadDetalle(selectedId)
+      await Promise.all([loadProductos(), loadDetalle(selectedId)])
     })
   }
 
@@ -127,23 +136,48 @@ export default function ProductosTab() {
   }
 
   async function handleEliminarAlias(aliasId: string) {
+    if (!selectedId) return
     startTransition(async () => {
       const r = await eliminarAlias(aliasId)
       if (r.error) { show(r.error, 'error'); return }
       show('Alias eliminado')
-      if (selectedId) await loadDetalle(selectedId)
+      await loadDetalle(selectedId)
     })
+  }
+
+  async function handleToggleActivo(prod: ProductoConMetricas) {
+    startTransition(async () => {
+      const fd = new FormData()
+      fd.set('nombre', prod.nombre)
+      fd.set('categoria', prod.categoria)
+      fd.append('activo', String(!prod.activo))
+      const r = await actualizarProducto(prod.id, fd)
+      if (r.error) { show(r.error, 'error'); return }
+      show(prod.activo ? 'Producto archivado' : 'Producto reactivado')
+      await loadProductos()
+      if (selectedId === prod.id) await loadDetalle(prod.id)
+    })
+  }
+
+  function handleOpenDetalle(id: string) {
+    setSelectedId(id)
+    loadDetalle(id)
+  }
+
+  const catLabels: Record<string, string> = {
+    hamburguesa: 'Hamburguesa', acompanamiento: 'Acompañamiento', bebida: 'Bebida', combo: 'Combo',
   }
 
   const filtrados = productos.filter((p) =>
     p.nombre.toLowerCase().includes(filtro.toLowerCase())
   )
 
-  const precioActual = detalle?.precios?.[0]?.precio ?? null
+  const showEmpty = loaded && filtrados.length === 0
+  const showTable = filtrados.length > 0
+  const showLoading = !loaded
 
   return (
     <div>
-      {/* Toolbar */}
       <div className="flex items-center justify-between mb-4">
         <div className="relative">
           <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-text-muted" />
@@ -154,10 +188,17 @@ export default function ProductosTab() {
         </Button>
       </div>
 
-      {/* Table */}
-      {filtrados.length === 0 ? (
+      {showLoading && (
+        <div className="bg-surface rounded-xl border border-border p-8 text-center">
+          <p className="text-sm text-text-muted">Cargando productos...</p>
+        </div>
+      )}
+
+      {showEmpty && (
         <EmptyState message="No hay productos cargados todavía." action={<Button onClick={() => setShowNew(true)}>Crear el primero</Button>} />
-      ) : (
+      )}
+
+      {showTable && (
         <div className="bg-surface rounded-xl border border-border overflow-hidden">
           <table className="w-full text-sm">
             <thead>
@@ -168,11 +209,40 @@ export default function ProductosTab() {
                 <th className="text-right px-4 py-3 font-medium text-text-secondary">Costo</th>
                 <th className="text-right px-4 py-3 font-medium text-text-secondary">Margen</th>
                 <th className="text-center px-4 py-3 font-medium text-text-secondary">Estado</th>
+                <th className="w-10"></th>
               </tr>
             </thead>
             <tbody>
               {filtrados.map((p) => (
-                <ProductoRow key={p.id} producto={p} onClick={() => setSelectedId(p.id)} />
+                <tr key={p.id} onClick={() => handleOpenDetalle(p.id)} className="border-b border-border last:border-0 hover:bg-surface-alt cursor-pointer transition-colors">
+                  <td className="px-4 py-3 font-medium text-text-primary">{p.nombre}</td>
+                  <td className="px-4 py-3 text-text-secondary">{catLabels[p.categoria] ?? p.categoria}</td>
+                  <td className="px-4 py-3 text-right font-medium">
+                    {p.precio_vigente != null ? formatARS(p.precio_vigente) : <Badge color="yellow">Sin precio</Badge>}
+                  </td>
+                  <td className="px-4 py-3 text-right text-text-secondary">
+                    {p.costo_calculado != null ? formatARS(p.costo_calculado) : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-right">
+                    {p.margen != null ? (
+                      <span className={p.margen >= 50 ? 'text-positive font-medium' : p.margen >= 30 ? 'text-warning font-medium' : 'text-negative font-medium'}>
+                        {formatPercent(p.margen)}
+                      </span>
+                    ) : '—'}
+                  </td>
+                  <td className="px-4 py-3 text-center">
+                    <Badge color={p.activo ? 'green' : 'gray'}>{p.activo ? 'Activo' : 'Inactivo'}</Badge>
+                  </td>
+                  <td className="px-2 py-3">
+                    <button
+                      onClick={(e) => { e.stopPropagation(); handleToggleActivo(p) }}
+                      title={p.activo ? 'Archivar' : 'Reactivar'}
+                      className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors"
+                    >
+                      {p.activo ? <Archive className="w-4 h-4" /> : <ArchiveRestore className="w-4 h-4" />}
+                    </button>
+                  </td>
+                </tr>
               ))}
             </tbody>
           </table>
@@ -192,7 +262,6 @@ export default function ProductosTab() {
       >
         {detalle?.producto && (
           <div className="space-y-8">
-            {/* Resumen económico */}
             {costoCalc && costoCalc.costo != null && (
               <div className="grid grid-cols-3 gap-3">
                 <div className="bg-surface-alt rounded-lg p-3 text-center">
@@ -210,18 +279,16 @@ export default function ProductosTab() {
               </div>
             )}
 
-            {/* Editar producto */}
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Datos del producto</h3>
-              <FormProducto onSubmit={handleActualizar} pending={pending} initial={detalle.producto} />
+              <FormProducto key={detalle.producto.id} onSubmit={handleActualizar} pending={pending} initial={detalle.producto} />
             </div>
 
-            {/* Precios */}
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Historial de precios</h3>
               {detalle.precios.length > 0 ? (
                 <div className="space-y-1.5 mb-4">
-                  {detalle.precios.map((p, i) => (
+                  {detalle.precios.map((p: PrecioHist, i: number) => (
                     <div key={p.id} className={`flex items-center justify-between px-3 py-2 rounded-lg text-sm ${i === 0 ? 'bg-brand-light font-medium' : 'bg-surface-alt'}`}>
                       <span>{formatDate(p.fecha_vigencia)}</span>
                       <span>{formatARS(p.precio)}</span>
@@ -242,7 +309,6 @@ export default function ProductosTab() {
               </form>
             </div>
 
-            {/* Receta */}
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Receta</h3>
               {costoCalc?.detalle && costoCalc.detalle.length > 0 ? (
@@ -281,12 +347,11 @@ export default function ProductosTab() {
               ) : (
                 <p className="text-sm text-text-muted mb-4">Sin receta. Agregá ingredientes para calcular costos.</p>
               )}
-
               <form action={handleAgregarReceta} className="flex items-end gap-2">
                 <Field label="Ingrediente">
                   <Select name="ingrediente_id" required>
                     <option value="">Seleccionar...</option>
-                    {ingredientes.filter(i => i.activo).map((i) => (
+                    {ingredientes.filter((i) => i.activo).map((i) => (
                       <option key={i.id} value={i.id}>{i.nombre}</option>
                     ))}
                   </Select>
@@ -298,12 +363,11 @@ export default function ProductosTab() {
               </form>
             </div>
 
-            {/* Mapeo Pedix */}
             <div>
               <h3 className="text-sm font-semibold text-text-primary mb-3">Mapeo Pedix</h3>
               {detalle.aliases.length > 0 && (
                 <div className="space-y-1.5 mb-4">
-                  {detalle.aliases.map((a) => (
+                  {detalle.aliases.map((a: Alias) => (
                     <div key={a.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-alt text-sm">
                       <span className="text-text-secondary truncate mr-2">{a.nombre_pedix}</span>
                       <button onClick={() => handleEliminarAlias(a.id)} className="p-1 text-text-muted hover:text-negative shrink-0">
@@ -329,63 +393,13 @@ export default function ProductosTab() {
   )
 }
 
-// ─── Row con cálculo ───
-
-function ProductoRow({ producto, onClick }: { producto: Producto; onClick: () => void }) {
-  const [calc, setCalc] = useState<CostoCalc | null>(null)
-
-  useEffect(() => {
-    import('./actions-productos').then(({ calcularCostoProducto }) =>
-      calcularCostoProducto(producto.id).then((c) => setCalc(c as any))
-    )
-  }, [producto.id])
-
-  const catLabels: Record<string, string> = {
-    hamburguesa: 'Hamburguesa',
-    acompanamiento: 'Acompañamiento',
-    bebida: 'Bebida',
-    combo: 'Combo',
-  }
-
-  return (
-    <tr onClick={onClick} className="border-b border-border last:border-0 hover:bg-surface-alt cursor-pointer transition-colors">
-      <td className="px-4 py-3 font-medium text-text-primary">{producto.nombre}</td>
-      <td className="px-4 py-3 text-text-secondary">{catLabels[producto.categoria] ?? producto.categoria}</td>
-      <td className="px-4 py-3 text-right font-medium">
-        {calc?.precio ? formatARS(calc.precio) : <Badge color="yellow">Sin precio</Badge>}
-      </td>
-      <td className="px-4 py-3 text-right text-text-secondary">
-        {calc?.costo != null ? formatARS(calc.costo) : '—'}
-      </td>
-      <td className="px-4 py-3 text-right">
-        {calc?.costo != null && calc.precio > 0 ? (
-          <span className={calc.margen >= 50 ? 'text-positive font-medium' : calc.margen >= 30 ? 'text-warning font-medium' : 'text-negative font-medium'}>
-            {formatPercent(calc.margen)}
-          </span>
-        ) : '—'}
-      </td>
-      <td className="px-4 py-3 text-center">
-        <Badge color={producto.activo ? 'green' : 'gray'}>
-          {producto.activo ? 'Activo' : 'Inactivo'}
-        </Badge>
-      </td>
-    </tr>
-  )
-}
-
-// ─── Form ───
-
 function FormProducto({
-  onSubmit,
-  pending,
-  initial,
-  isNew,
+  onSubmit, pending, initial, isNew,
 }: {
-  onSubmit: (fd: FormData) => void
-  pending: boolean
-  initial?: Producto
-  isNew?: boolean
+  onSubmit: (fd: FormData) => void; pending: boolean; initial?: any; isNew?: boolean;
 }) {
+  const [activo, setActivo] = useState(initial?.activo ?? true)
+
   return (
     <form action={onSubmit} className="space-y-4">
       <Field label="Nombre">
@@ -407,7 +421,7 @@ function FormProducto({
       {!isNew && (
         <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
           <input type="hidden" name="activo" value="false" />
-          <input type="checkbox" name="activo" value="true" defaultChecked={initial?.activo ?? true} className="rounded border-border" />
+          <input type="checkbox" name="activo" value="true" checked={activo} onChange={(e) => setActivo(e.target.checked)} className="rounded border-border" />
           Activo
         </label>
       )}

@@ -3,14 +3,40 @@
 import { createClient } from '@/lib/supabase/server'
 import { revalidatePath } from 'next/cache'
 
-export async function getIngredientes() {
+// Obtiene ingredientes CON su costo vigente en una sola consulta
+export async function getIngredientesConCosto() {
   const supabase = await createClient()
-  const { data, error } = await supabase
+  const hoy = new Date().toISOString().split('T')[0]
+
+  // 1. Todos los ingredientes
+  const { data: ingredientes, error } = await supabase
     .from('ingredientes')
     .select('*')
     .order('nombre')
   if (error) throw error
-  return data
+
+  // 2. Todos los costos (para resolver vigentes sin N+1)
+  // Desempate por created_at: si hay 2 costos con misma fecha, gana el último cargado
+  const { data: todosCostos } = await supabase
+    .from('ingredientes_costos')
+    .select('ingrediente_id, costo_por_unidad_compra, fecha_vigencia, created_at')
+    .lte('fecha_vigencia', hoy)
+    .order('fecha_vigencia', { ascending: false })
+    .order('created_at', { ascending: false })
+
+  // 3. Mapa de costo vigente por ingrediente (el primero de cada grupo)
+  const costoVigente: Record<string, number> = {}
+  for (const c of todosCostos ?? []) {
+    if (!(c.ingrediente_id in costoVigente)) {
+      costoVigente[c.ingrediente_id] = c.costo_por_unidad_compra
+    }
+  }
+
+  // 4. Merge
+  return (ingredientes ?? []).map((ing) => ({
+    ...ing,
+    costo_vigente: costoVigente[ing.id] ?? null,
+  }))
 }
 
 export async function getIngredienteConCostos(id: string) {
@@ -26,22 +52,14 @@ export async function getIngredienteConCostos(id: string) {
     .select('*')
     .eq('ingrediente_id', id)
     .order('fecha_vigencia', { ascending: false })
+    .order('created_at', { ascending: false })
 
   return { ingrediente, costos: costos ?? [] }
 }
 
-export async function getCostoVigente(ingredienteId: string, fecha?: string) {
-  const supabase = await createClient()
-  const f = fecha ?? new Date().toISOString().split('T')[0]
-  const { data } = await supabase
-    .from('ingredientes_costos')
-    .select('costo_por_unidad_compra')
-    .eq('ingrediente_id', ingredienteId)
-    .lte('fecha_vigencia', f)
-    .order('fecha_vigencia', { ascending: false })
-    .limit(1)
-    .single()
-  return data?.costo_por_unidad_compra ?? null
+// Helper para checkbox: getAll().includes('true') evita el bug del hidden input
+function checkboxValue(formData: FormData, name: string): boolean {
+  return formData.getAll(name).includes('true')
 }
 
 export async function crearIngrediente(formData: FormData) {
@@ -50,7 +68,7 @@ export async function crearIngrediente(formData: FormData) {
   const unidad_compra = formData.get('unidad_compra') as string
   const unidad_receta = formData.get('unidad_receta') as string
   const factor_conversion = Number(formData.get('factor_conversion'))
-  const controlado_stock = formData.get('controlado_stock') === 'true'
+  const controlado_stock = checkboxValue(formData, 'controlado_stock')
   const costo_inicial = Number(formData.get('costo_inicial'))
 
   const { data: ingrediente, error } = await supabase
@@ -79,8 +97,8 @@ export async function actualizarIngrediente(id: string, formData: FormData) {
   const unidad_compra = formData.get('unidad_compra') as string
   const unidad_receta = formData.get('unidad_receta') as string
   const factor_conversion = Number(formData.get('factor_conversion'))
-  const controlado_stock = formData.get('controlado_stock') === 'true'
-  const activo = formData.get('activo') === 'true'
+  const controlado_stock = checkboxValue(formData, 'controlado_stock')
+  const activo = checkboxValue(formData, 'activo')
 
   const { error } = await supabase
     .from('ingredientes')

@@ -22,8 +22,13 @@ export default function ProductosPage() {
         />
       </div>
 
-      {tab === 'ingredientes' && <IngredientesTab />}
-      {tab === 'productos' && <ProductosTab />}
+      {/* Ambos montados siempre. hidden evita re-mount y re-fetch al cambiar tab */}
+      <div className={tab !== 'ingredientes' ? 'hidden' : ''}>
+        <IngredientesTab />
+      </div>
+      <div className={tab !== 'productos' ? 'hidden' : ''}>
+        <ProductosTab />
+      </div>
     </div>
   )
 }
