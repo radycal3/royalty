@@ -12,8 +12,8 @@ export async function middleware(request: NextRequest) {
         getAll() {
           return request.cookies.getAll()
         },
-        setAll(cookiesToSet: { name: string; value: string; options?: any }[]) {
-          cookiesToSet.forEach(({ name, value, options }) =>
+        setAll(cookiesToSet) {
+          cookiesToSet.forEach(({ name, value }) =>
             request.cookies.set(name, value)
           )
           supabaseResponse = NextResponse.next({ request })
@@ -28,51 +28,51 @@ export async function middleware(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser()
   const path = request.nextUrl.pathname
 
-  // Public routes
+  // --- DEBUG LOGS (remover antes de producción) ---
+
+  // Ruta pública: /login
   if (path === '/login') {
     if (user) {
-      // Logged in user on login page → redirect to app
-      const { data: usuario } = await supabase
+      const { data: usuario, error: usuarioError } = await supabase
         .from('usuarios')
         .select('rol')
         .eq('id', user.id)
         .single()
 
+    
       const dest = usuario?.rol === 'empleado' ? '/panel' : '/dashboard'
       return NextResponse.redirect(new URL(dest, request.url))
     }
     return supabaseResponse
   }
 
-  // No user → redirect to login
+  // Sin sesión → login
   if (!user) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Get user role
-  const { data: usuario } = await supabase
+  // Obtener rol
+  const { data: usuario, error: usuarioError } = await supabase
     .from('usuarios')
     .select('rol')
     .eq('id', user.id)
     .single()
 
+  console.log('TABLA USUARIOS:', usuario)
+  console.log('ERROR USUARIOS:', usuarioError)
+  // --- FIN DEBUG LOGS ---
+
   if (!usuario) {
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
-  // Admin routes — block employees
+  // Rutas admin — bloquear empleados
   const adminRoutes = [
     '/dashboard', '/importar', '/productos', '/gastos',
     '/stock', '/equipo', '/cadetes', '/laboratorio', '/configuracion'
   ]
   if (adminRoutes.some(r => path.startsWith(r)) && usuario.rol !== 'admin') {
     return NextResponse.redirect(new URL('/panel', request.url))
-  }
-
-  // Employee routes — block admin (optional, admin can see everything)
-  if (path.startsWith('/panel') && usuario.rol === 'admin') {
-    // Admin can also access employee panel if needed
-    return supabaseResponse
   }
 
   return supabaseResponse
