@@ -218,10 +218,9 @@ export async function registrarConsumo(input: {
   // ── Crear cabecera ──
   const { data: consumo, error: errC } = await admin
     .from('consumo_interno')
-    .insert({
+   .insert({
       fecha: input.fecha,
       nota: input.nota,
-      registrado_por: authUser.user.id,
     })
     .select('id')
     .single();

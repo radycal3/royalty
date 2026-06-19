@@ -15,6 +15,7 @@ import {
   Settings,
   LogOut,
   Crown,
+  UtensilsCrossed,
 } from 'lucide-react'
 
 const nav = [
@@ -24,6 +25,7 @@ const nav = [
   { href: '/gastos', label: 'Gastos', icon: Receipt },
   { href: '/stock', label: 'Stock', icon: Package },
   { href: '/equipo', label: 'Equipo', icon: Users },
+  { href: '/consumo-interno', label: 'Consumo interno', icon: UtensilsCrossed },
   { href: '/cadetes', label: 'Cadetes', icon: Bike },
   { href: '/laboratorio', label: 'Laboratorio', icon: FlaskConical },
 ]
