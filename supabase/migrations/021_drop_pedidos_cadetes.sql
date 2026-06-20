@@ -1,0 +1,29 @@
+-- 021_drop_pedidos_cadetes.sql
+-- Fase 4 (Cadetes) — limpieza del modelo descartado.
+--
+-- ⚠ APLICAR SOLO DESPUÉS de:
+--   1. Haber corrido 020_cadetes_jornadas.sql
+--   2. Haber reemplazado actions.ts en producción por la versión que ya NO
+--      consulta pedidos_cadetes (usa cadetes_jornadas en su lugar)
+--   3. Haber confirmado que el dashboard carga sin error
+--
+-- Si se corre antes de reemplazar actions.ts, el dashboard va a fallar al
+-- intentar consultar una tabla que ya no existe.
+--
+-- Contexto: se decidió no asignar pedidos individuales a cadetes. La
+-- liquidación se basa exclusivamente en el cierre operativo nocturno
+-- (cadetes_jornadas: cadete + fecha + viajes_realizados), no en pedidos
+-- individuales. pedidos_cadetes no tiene ningún otro consumidor en el
+-- proyecto ni ninguna tabla con FK hacia ella.
+--
+-- DROP TABLE en Postgres elimina en cascada, sin necesidad de pasos
+-- adicionales:
+--   - Los índices idx_pedidos_cadetes_fecha e idx_pedidos_cadetes_equipo
+--   - El RLS habilitado sobre la tabla
+--   - Las 4 políticas: pedidos_cadetes_select/insert/update/delete
+--
+-- No existe ningún trigger ni función asociada a esta tabla (nunca se
+-- llegó a implementar la variante con trigger que se había considerado en
+-- una iteración anterior del diseño).
+
+DROP TABLE IF EXISTS pedidos_cadetes;

@@ -132,6 +132,7 @@ function FilaCascada({
   pct,
   esTotal = false,
   negativo = false,
+  signoAutomatico = false,
   indent = false,
 }: {
   label: string;
@@ -139,8 +140,14 @@ function FilaCascada({
   pct?: number;
   esTotal?: boolean;
   negativo?: boolean;
+  signoAutomatico?: boolean;
   indent?: boolean;
 }) {
+  // signoAutomatico: para filas como "Resultado Delivery" que pueden ser
+  // positivas o negativas según el período (a diferencia de costos/gastos,
+  // que siempre restan).
+  const esNegativoReal = signoAutomatico ? valor < 0 : negativo;
+
   return (
     <div
       className={`flex items-center justify-between py-2 ${
@@ -154,10 +161,20 @@ function FilaCascada({
         )}
         <span
           className={`w-32 text-right tabular-nums ${
-            esTotal ? 'text-text-primary' : negativo ? 'text-negative' : 'text-text-primary'
+            esTotal
+              ? 'text-text-primary'
+              : esNegativoReal
+              ? 'text-negative'
+              : signoAutomatico
+              ? 'text-positive'
+              : 'text-text-primary'
           }`}
         >
-          {negativo ? `(${formatARS(Math.abs(valor))})` : formatARS(valor)}
+          {esNegativoReal
+            ? `(${formatARS(Math.abs(valor))})`
+            : signoAutomatico
+            ? `+${formatARS(valor)}`
+            : formatARS(valor)}
         </span>
       </div>
     </div>
@@ -395,7 +412,7 @@ export default function DashboardPage() {
       ) : kpis ? (
         <div className={loading ? 'space-y-6 opacity-60 transition-opacity' : 'space-y-6'}>
           {/* ── KPI Cards ──────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <KpiCard titulo="Pedidos" valor={kpis.actual.pedidos.toString()}>
               <Delta actual={kpis.actual.pedidos} anterior={kpis.anterior?.pedidos ?? null} />
             </KpiCard>
@@ -455,6 +472,29 @@ export default function DashboardPage() {
                 anterior={kpis.anterior?.ticketPromedio ?? null}
               />
             </KpiCard>
+            <KpiCard
+              titulo="ROAS"
+              valor={kpis.actual.roas > 0 ? `${kpis.actual.roas.toFixed(2)}x` : '—'}
+            >
+              {kpis.actual.gastoPublicidad === 0 ? (
+                <span className="text-xs text-text-muted">Sin gasto en publicidad</span>
+              ) : kpis.anterior && kpis.anterior.gastoPublicidad === 0 ? (
+                // Hay período anterior, pero sin gasto en publicidad: el ROAS
+                // anterior da 0 por ausencia de dato, no por mal desempeño.
+                // No es "sin comparativo" — es que la pauta arrancó este período.
+                <span className="text-xs text-text-muted">Publicidad nueva este período</span>
+              ) : (
+                <Delta actual={kpis.actual.roas} anterior={kpis.anterior?.roas ?? null} />
+              )}
+            </KpiCard>
+            <KpiCard titulo="Publicidad % s/ventas" valor={formatPercent(kpis.actual.publicidadPct)}>
+              <Delta
+                actual={kpis.actual.publicidadPct}
+                anterior={kpis.anterior?.publicidadPct ?? null}
+                invertido
+                esPuntoPorcentual
+              />
+            </KpiCard>
           </div>
 
           {/* ── Cascada P&L ────────────────────────────────────────── */}
@@ -492,7 +532,7 @@ export default function DashboardPage() {
               />
 
               {gastos
-                .filter((g) => g.tipo === 'variable')
+                .filter((g) => g.tipo === 'variable' && !g.legacy)
                 .map((g) => (
                   <FilaCascada
                     key={`var-${g.categoria}`}
@@ -505,7 +545,7 @@ export default function DashboardPage() {
                 ))}
 
               {gastos
-                .filter((g) => g.tipo === 'fijo')
+                .filter((g) => g.tipo === 'fijo' && !g.legacy)
                 .map((g) => (
                   <FilaCascada
                     key={`fijo-${g.categoria}`}
@@ -517,11 +557,54 @@ export default function DashboardPage() {
                   />
                 ))}
 
-              {gastos.length === 0 && (
+              {gastos.filter((g) => !g.legacy).length === 0 && (
                 <div className="py-2 pl-4 text-xs text-text-muted">
                   Sin gastos registrados en este período
                 </div>
               )}
+
+              <FilaCascada
+                label="Envíos cobrados"
+                valor={kpis.actual.enviosCobrados}
+                pct={
+                  kpis.actual.ventas > 0
+                    ? (kpis.actual.enviosCobrados / kpis.actual.ventas) * 100
+                    : 0
+                }
+                indent
+              />
+              <FilaCascada
+                label="Pagos a cadetes"
+                valor={kpis.actual.pagosCadetes}
+                pct={
+                  kpis.actual.ventas > 0
+                    ? (kpis.actual.pagosCadetes / kpis.actual.ventas) * 100
+                    : 0
+                }
+                negativo
+                indent
+              />
+              <FilaCascada
+                label="Base cadetería"
+                valor={kpis.actual.costoBaseCadeteria}
+                pct={
+                  kpis.actual.ventas > 0
+                    ? (kpis.actual.costoBaseCadeteria / kpis.actual.ventas) * 100
+                    : 0
+                }
+                negativo
+                indent
+              />
+              <FilaCascada
+                label="Resultado Delivery"
+                valor={kpis.actual.resultadoDelivery}
+                pct={
+                  kpis.actual.ventas > 0
+                    ? (kpis.actual.resultadoDelivery / kpis.actual.ventas) * 100
+                    : 0
+                }
+                signoAutomatico
+              />
 
               <FilaCascada
                 label="Beneficio neto"
@@ -530,6 +613,32 @@ export default function DashboardPage() {
                 esTotal
               />
             </div>
+
+            {gastos.some((g) => g.legacy) && (
+              <div className="mt-4 rounded-md border border-border bg-warning-bg px-3 py-2.5 text-xs text-warning">
+                <div className="font-medium">⚠ Cadetería (legacy)</div>
+                <div className="mt-0.5 text-text-secondary">
+                  Este gasto proviene del sistema anterior y no participa del cálculo actual de
+                  Resultado Delivery. La fuente de verdad para cadetería es el cierre operativo
+                  de cadetes (viajes realizados) + envíos cobrados.
+                </div>
+                <div className="mt-2 space-y-1">
+                  {gastos
+                    .filter((g) => g.legacy)
+                    .map((g) => (
+                      <div
+                        key={`legacy-${g.tipo}-${g.categoria}`}
+                        className="flex items-center justify-between text-text-secondary"
+                      >
+                        <span>
+                          Cadetería ({g.tipo}) — registro histórico
+                        </span>
+                        <span className="tabular-nums">{formatARS(g.total)}</span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+            )}
           </div>
 
           {/* ── Rankings de productos ──────────────────────────────── */}

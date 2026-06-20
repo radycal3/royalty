@@ -1,137 +1,347 @@
-'use client'
+'use client';
 
-import { useState, useEffect, useTransition } from 'react'
-import { Field, Input, Select, Button, useToast } from '@/components/ui'
-import { getConfiguracion, guardarConfiguracion, getProductosParaConfig, getMapeosPedix } from './actions'
+import { useEffect, useState } from 'react';
+import {
+  obtenerConfigCadeteria,
+  guardarConfigCadeteria,
+  obtenerConfigMeta,
+  guardarConfigMeta,
+  obtenerConfigAlertas,
+  guardarConfigAlertas,
+  obtenerConfigProductosConsumo,
+  guardarConfigProductosConsumo,
+  obtenerProductosActivos,
+  type ConfigCadeteria,
+  type ConfigMeta,
+  type ConfigAlertas,
+  type ConfigProductosConsumo,
+  type ProductoOpcion,
+} from './actions';
+import { Field, Input, Select, Button, useToast } from '@/components/ui';
+
+// ─── Sección genérica: contenedor con título + botón Guardar propio ──────
+
+function Seccion({
+  titulo,
+  descripcion,
+  children,
+  onGuardar,
+  guardando,
+}: {
+  titulo: string;
+  descripcion?: string;
+  children: React.ReactNode;
+  onGuardar: () => void;
+  guardando: boolean;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-5">
+      <h2 className="text-sm font-semibold text-text-primary">{titulo}</h2>
+      {descripcion && <p className="mt-1 text-xs text-text-muted">{descripcion}</p>}
+      <div className="mt-4 space-y-4">{children}</div>
+      <div className="mt-4 flex justify-end">
+        <Button variant="primary" size="sm" onClick={onGuardar} disabled={guardando}>
+          {guardando ? 'Guardando…' : 'Guardar'}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ─── Componente principal ───────────────────────────────────────────────
 
 export default function ConfiguracionPage() {
-  const [config, setConfig] = useState<Record<string, string>>({})
-  const [productos, setProductos] = useState<{ id: string; nombre: string }[]>([])
-  const [mapeos, setMapeos] = useState<any[]>([])
-  const [pending, startTransition] = useTransition()
-  const { show, Toast } = useToast()
+  const { show: showToast, Toast } = useToast();
 
-  useEffect(() => { loadAll() }, [])
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  async function loadAll() {
-    const [c, p, m] = await Promise.all([
-      getConfiguracion(),
-      getProductosParaConfig(),
-      getMapeosPedix(),
-    ])
-    setConfig(c)
-    setProductos(p)
-    setMapeos(m)
-  }
+  // Cadetería
+  const [cadeteria, setCadeteria] = useState<ConfigCadeteria | null>(null);
+  const [guardandoCadeteria, setGuardandoCadeteria] = useState(false);
 
-  async function handleGuardar(fd: FormData) {
-    startTransition(async () => {
-      const r = await guardarConfiguracion(fd)
-      if (r.success) {
-        show('Configuración guardada')
-        await loadAll()
+  // Meta
+  const [meta, setMeta] = useState<ConfigMeta | null>(null);
+  const [guardandoMeta, setGuardandoMeta] = useState(false);
+
+  // Alertas
+  const [alertas, setAlertas] = useState<ConfigAlertas | null>(null);
+  const [guardandoAlertas, setGuardandoAlertas] = useState(false);
+
+  // Productos de consumo
+  const [productosConsumo, setProductosConsumo] = useState<ConfigProductosConsumo | null>(null);
+  const [productosOpciones, setProductosOpciones] = useState<ProductoOpcion[]>([]);
+  const [guardandoProductos, setGuardandoProductos] = useState(false);
+
+  useEffect(() => {
+    async function cargarTodo() {
+      setLoading(true);
+      setError(null);
+      try {
+        const [c, m, a, pc, opciones] = await Promise.all([
+          obtenerConfigCadeteria(),
+          obtenerConfigMeta(),
+          obtenerConfigAlertas(),
+          obtenerConfigProductosConsumo(),
+          obtenerProductosActivos(),
+        ]);
+        setCadeteria(c);
+        setMeta(m);
+        setAlertas(a);
+        setProductosConsumo(pc);
+        setProductosOpciones(opciones);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Error al cargar configuración');
+      } finally {
+        setLoading(false);
       }
-    })
+    }
+    cargarTodo();
+  }, []);
+
+  async function handleGuardarCadeteria() {
+    if (!cadeteria) return;
+    setGuardandoCadeteria(true);
+    try {
+      const r = await guardarConfigCadeteria(cadeteria);
+      if (!r.ok) showToast(r.mensaje, 'error');
+      else showToast('Cadetería actualizada. Afecta solo jornadas futuras.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error al guardar', 'error');
+    } finally {
+      setGuardandoCadeteria(false);
+    }
   }
 
-  if (!config.cadete_base_minima) {
-    return <div className="text-sm text-text-muted">Cargando configuración...</div>
+  async function handleGuardarMeta() {
+    if (!meta) return;
+    setGuardandoMeta(true);
+    try {
+      const r = await guardarConfigMeta(meta);
+      if (!r.ok) showToast(r.mensaje, 'error');
+      else showToast('Meta semanal actualizada.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error al guardar', 'error');
+    } finally {
+      setGuardandoMeta(false);
+    }
+  }
+
+  async function handleGuardarAlertas() {
+    if (!alertas) return;
+    setGuardandoAlertas(true);
+    try {
+      const r = await guardarConfigAlertas(alertas);
+      if (!r.ok) showToast(r.mensaje, 'error');
+      else showToast('Alertas actualizadas.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error al guardar', 'error');
+    } finally {
+      setGuardandoAlertas(false);
+    }
+  }
+
+  async function handleGuardarProductos() {
+    if (!productosConsumo) return;
+    setGuardandoProductos(true);
+    try {
+      const r = await guardarConfigProductosConsumo(productosConsumo);
+      if (!r.ok) showToast(r.mensaje, 'error');
+      else showToast('Productos de consumo actualizados.');
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error al guardar', 'error');
+    } finally {
+      setGuardandoProductos(false);
+    }
+  }
+
+  if (loading) {
+    return <div className="py-16 text-center text-sm text-text-muted">Cargando…</div>;
   }
 
   return (
-    <div className="max-w-2xl">
-      <h1 className="text-xl font-semibold text-text-primary mb-6">Configuración</h1>
+    <div className="space-y-6">
+      <h1 className="text-lg font-semibold text-text-primary">Configuración</h1>
 
-      <form action={handleGuardar} className="space-y-8">
-        {/* Cadetería */}
-        <section className="bg-surface rounded-xl border border-border p-6">
-          <h2 className="text-sm font-semibold text-text-primary mb-4">Cadetería</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Base mínima ($)">
-              <Input name="cadete_base_minima" type="number" min="0" step="1" defaultValue={config.cadete_base_minima} />
-            </Field>
-            <Field label="Valor por viaje ($)">
-              <Input name="cadete_valor_viaje" type="number" min="0" step="1" defaultValue={config.cadete_valor_viaje} />
-            </Field>
-          </div>
-        </section>
+      {error && (
+        <div className="rounded-lg border border-negative bg-negative-bg px-4 py-3 text-sm text-negative">
+          {error}
+        </div>
+      )}
 
-        {/* Consumo interno */}
-        <section className="bg-surface rounded-xl border border-border p-6">
-          <h2 className="text-sm font-semibold text-text-primary mb-4">Consumo interno</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Producto empleado" hint="Se consume 1 por noche trabajada">
-              <Select name="producto_consumo_empleado" defaultValue={config.producto_consumo_empleado ?? ''}>
-                <option value="">Sin configurar</option>
-                {productos.map((p) => (
-                  <option key={p.id} value={p.id}>{p.nombre}</option>
-                ))}
-              </Select>
-            </Field>
-            <Field label="Producto cadete" hint="Se consume 1 si supera la base">
-              <Select name="producto_consumo_cadete" defaultValue={config.producto_consumo_cadete ?? ''}>
-                <option value="">Sin configurar</option>
-                {productos.map((p) => (
-                  <option key={p.id} value={p.id}>{p.nombre}</option>
-                ))}
-              </Select>
-            </Field>
-          </div>
-        </section>
+      {/* ── Cadetería ──────────────────────────────────────────────────── */}
+      {cadeteria && (
+        <Seccion
+          titulo="Cadetería"
+          descripcion="Afecta únicamente jornadas que se registren después de guardar. Las jornadas ya cargadas mantienen los valores con los que se liquidaron."
+          onGuardar={handleGuardarCadeteria}
+          guardando={guardandoCadeteria}
+        >
+          <Field label="Base mínima por noche (ARS)">
+            <Input
+              type="number"
+              min={0}
+              value={cadeteria.cadeteBaseMinima}
+              onChange={(e) =>
+                setCadeteria({ ...cadeteria, cadeteBaseMinima: parseFloat(e.target.value) || 0 })
+              }
+            />
+          </Field>
+          <Field label="Valor por viaje (ARS)">
+            <Input
+              type="number"
+              min={0}
+              value={cadeteria.cadeteValorViaje}
+              onChange={(e) =>
+                setCadeteria({ ...cadeteria, cadeteValorViaje: parseFloat(e.target.value) || 0 })
+              }
+            />
+          </Field>
+          <Field label="Costo empresa de cadetería por cadete activo (ARS)">
+            <Input
+              type="number"
+              min={0}
+              value={cadeteria.costoEmpresaCadete}
+              onChange={(e) =>
+                setCadeteria({
+                  ...cadeteria,
+                  costoEmpresaCadete: parseFloat(e.target.value) || 0,
+                })
+              }
+            />
+          </Field>
+        </Seccion>
+      )}
 
-        {/* Metas */}
-        <section className="bg-surface rounded-xl border border-border p-6">
-          <h2 className="text-sm font-semibold text-text-primary mb-4">Meta del equipo</h2>
-          <div className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <Field label="Nombre de la meta">
-                <Input name="meta_nombre" defaultValue={config.meta_nombre} />
+      {/* ── Meta semanal ───────────────────────────────────────────────── */}
+      {meta && (
+        <Seccion
+          titulo="Meta semanal"
+          onGuardar={handleGuardarMeta}
+          guardando={guardandoMeta}
+        >
+          <Field label="Nombre de la meta">
+            <Input
+              type="text"
+              value={meta.metaNombre}
+              onChange={(e) => setMeta({ ...meta, metaNombre: e.target.value })}
+            />
+          </Field>
+          <Field label="Descripción">
+            <Input
+              type="text"
+              value={meta.metaDescripcion}
+              onChange={(e) => setMeta({ ...meta, metaDescripcion: e.target.value })}
+            />
+          </Field>
+          <Field label="Cantidad de hamburguesas">
+            <Input
+              type="number"
+              min={0}
+              value={meta.metaHamburguesas}
+              onChange={(e) =>
+                setMeta({ ...meta, metaHamburguesas: parseFloat(e.target.value) || 0 })
+              }
+            />
+          </Field>
+        </Seccion>
+      )}
+
+      {/* ── Alertas ────────────────────────────────────────────────────── */}
+      {alertas && (
+        <Seccion
+          titulo="Alertas"
+          descripcion="Umbrales usados para destacar valores fuera de rango en el dashboard."
+          onGuardar={handleGuardarAlertas}
+          guardando={guardandoAlertas}
+        >
+          <Field label="Margen mínimo (%)" hint="Por debajo de este valor se considera bajo">
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={alertas.alertaMargenMinimo}
+              onChange={(e) =>
+                setAlertas({ ...alertas, alertaMargenMinimo: parseFloat(e.target.value) || 0 })
+              }
+            />
+          </Field>
+          <Field
+            label="Publicidad máxima sobre ventas (%)"
+            hint="Por encima de este valor se considera alto"
+          >
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={alertas.alertaPublicidadMaxima}
+              onChange={(e) =>
+                setAlertas({
+                  ...alertas,
+                  alertaPublicidadMaxima: parseFloat(e.target.value) || 0,
+                })
+              }
+            />
+          </Field>
+        </Seccion>
+      )}
+
+      {/* ── Productos de consumo ──────────────────────────────────────── */}
+      {productosConsumo && (
+        <Seccion
+          titulo="Productos de consumo interno"
+          descripcion="Producto que se usa al registrar consumo interno de empleados y de cadetes."
+          onGuardar={handleGuardarProductos}
+          guardando={guardandoProductos}
+        >
+          {productosOpciones.length === 0 ? (
+            <p className="text-sm text-text-muted">
+              No hay productos activos disponibles para seleccionar.
+            </p>
+          ) : (
+            <>
+              <Field label="Producto para consumo de empleado">
+                <Select
+                  value={productosConsumo.productoConsumoEmpleado || ''}
+                  onChange={(e) =>
+                    setProductosConsumo({
+                      ...productosConsumo,
+                      productoConsumoEmpleado: e.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">Seleccionar producto…</option>
+                  {productosOpciones.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombre}
+                    </option>
+                  ))}
+                </Select>
               </Field>
-              <Field label="Hamburguesas objetivo">
-                <Input name="meta_hamburguesas" type="number" min="1" defaultValue={config.meta_hamburguesas} />
+              <Field label="Producto para consumo de cadete">
+                <Select
+                  value={productosConsumo.productoConsumoCadete || ''}
+                  onChange={(e) =>
+                    setProductosConsumo({
+                      ...productosConsumo,
+                      productoConsumoCadete: e.target.value || null,
+                    })
+                  }
+                >
+                  <option value="">Seleccionar producto…</option>
+                  {productosOpciones.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.nombre}
+                    </option>
+                  ))}
+                </Select>
               </Field>
-            </div>
-            <Field label="Descripción (opcional)">
-              <Input name="meta_descripcion" defaultValue={config.meta_descripcion ?? ''} />
-            </Field>
-          </div>
-        </section>
-
-        {/* Alertas */}
-        <section className="bg-surface rounded-xl border border-border p-6">
-          <h2 className="text-sm font-semibold text-text-primary mb-4">Alertas del dashboard</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <Field label="Margen mínimo (%)" hint="Alerta si baja de este valor">
-              <Input name="alerta_margen_minimo" type="number" min="0" max="100" defaultValue={config.alerta_margen_minimo} />
-            </Field>
-            <Field label="Publicidad máxima (% de ventas)" hint="Alerta si supera este valor">
-              <Input name="alerta_publicidad_maxima" type="number" min="0" max="100" defaultValue={config.alerta_publicidad_maxima} />
-            </Field>
-          </div>
-        </section>
-
-        <Button type="submit" disabled={pending}>Guardar cambios</Button>
-      </form>
-
-      {/* Mapeos Pedix (solo lectura) */}
-      <section className="bg-surface rounded-xl border border-border p-6 mt-8">
-        <h2 className="text-sm font-semibold text-text-primary mb-4">Mapeo Pedix</h2>
-        <p className="text-xs text-text-muted mb-4">Los mapeos se gestionan desde el panel lateral de cada producto.</p>
-        {mapeos.length > 0 ? (
-          <div className="space-y-1.5">
-            {mapeos.map((m: any) => (
-              <div key={m.id} className="flex items-center justify-between px-3 py-2 rounded-lg bg-surface-alt text-sm">
-                <span className="text-text-secondary truncate">{m.nombre_pedix}</span>
-                <span className="text-text-primary font-medium">{m.productos?.nombre ?? '—'}</span>
-              </div>
-            ))}
-          </div>
-        ) : (
-          <p className="text-sm text-text-muted">No hay mapeos todavía. Cargalos desde cada producto.</p>
-        )}
-      </section>
+            </>
+          )}
+        </Seccion>
+      )}
 
       <Toast />
     </div>
-  )
+  );
 }
