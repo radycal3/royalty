@@ -22,8 +22,18 @@ import {
   type ProductoRanking,
   type IngredienteConsumo,
 } from './actions';
+import {
+  validarCierre,
+  cerrarPeriodo,
+  obtenerPeriodoActual,
+  obtenerEvolucion,
+  obtenerRecords,
+  type ValidacionCierre,
+  type PeriodoCerrado,
+  type RecordHistorico,
+} from '../evolucion/actions';
 import { formatARS, formatPercent } from '@/lib/utils/format';
-import { EmptyState } from '@/components/ui';
+import { EmptyState, useToast } from '@/components/ui';
 
 // ─── Constantes ──────────────────────────────────────────────────────────
 
@@ -181,6 +191,109 @@ function FilaCascada({
   );
 }
 
+// ─── Mini gráfico (sparkline) para la sección Evolución ─────────────────
+
+function MiniGrafico({
+  titulo,
+  valores,
+  formato,
+  record,
+}: {
+  titulo: string;
+  valores: number[];
+  formato: (n: number) => string;
+  record?: RecordHistorico | null;
+}) {
+  if (valores.length === 0) {
+    return (
+      <div className="rounded-lg border border-border bg-surface p-4">
+        <div className="text-xs text-text-muted">{titulo}</div>
+        <div className="mt-6 text-center text-xs text-text-muted">Sin datos</div>
+      </div>
+    );
+  }
+
+  const min = Math.min(...valores);
+  const max = Math.max(...valores);
+  const rango = max - min || 1;
+  const w = 240;
+  const h = 56;
+  const pad = 4;
+
+  const puntos = valores.map((v, i) => {
+    const x = valores.length > 1 ? (i / (valores.length - 1)) * (w - pad * 2) + pad : w / 2;
+    const y = h - pad - ((v - min) / rango) * (h - pad * 2);
+    return `${x},${y}`;
+  });
+
+  const primero = valores[0];
+  const ultimo = valores[valores.length - 1];
+  const subio = ultimo > primero;
+
+  const pctRecord =
+    record && record.valor > 0 ? Math.round((ultimo / record.valor) * 100) : null;
+
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="text-xs text-text-muted">{titulo}</div>
+      <svg
+        viewBox={`0 0 ${w} ${h}`}
+        className={`mt-2 w-full ${subio ? 'text-positive' : 'text-negative'}`}
+        style={{ height: h }}
+      >
+        <polyline points={puntos.join(' ')} fill="none" stroke="currentColor" strokeWidth="1.5" />
+      </svg>
+      <div className="mt-1 flex items-center justify-between text-xs">
+        <span className="tabular-nums text-text-secondary">{formato(primero)}</span>
+        <span className="tabular-nums text-text-secondary">→</span>
+        <span className="tabular-nums font-medium text-text-primary">{formato(ultimo)}</span>
+      </div>
+      {pctRecord !== null && record && (
+        <div className="mt-2 border-t border-border/50 pt-2 text-xs text-text-muted">
+          <span className="font-medium text-text-secondary">{pctRecord}% del récord</span>
+          <div>
+            Récord: {formato(record.valor)} · {record.label}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Línea de la tarjeta de Tendencia reciente ───────────────────────────
+
+function TendenciaItem({
+  label,
+  actual,
+  anterior,
+  formato,
+  invertido = false,
+}: {
+  label: string;
+  actual: number;
+  anterior: number;
+  formato: (n: number) => string;
+  invertido?: boolean;
+}) {
+  const diff = actual - anterior;
+  const subio = diff > 0;
+  const sinCambio = Math.abs(diff) < 0.005 * Math.max(Math.abs(actual), 1);
+  const positivo = sinCambio ? null : invertido ? !subio : subio;
+
+  return (
+    <div className="flex items-center justify-between py-1.5 text-sm">
+      <span className="text-text-secondary">{label}</span>
+      <span
+        className={`font-medium ${
+          sinCambio ? 'text-text-muted' : positivo ? 'text-positive' : 'text-negative'
+        }`}
+      >
+        {sinCambio ? '—' : subio ? '↑' : '↓'} {formato(Math.abs(diff))}
+      </span>
+    </div>
+  );
+}
+
 // ─── Componente principal ───────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -204,6 +317,25 @@ export default function DashboardPage() {
 
   const requestIdRef = useRef(0);
 
+  const { show: showToast, Toast } = useToast();
+
+  // ── Cierre de período ───────────────────────────────────────────────
+  const [periodoCerradoActual, setPeriodoCerradoActual] = useState<PeriodoCerrado | null>(null);
+  const [modalCierreAbierto, setModalCierreAbierto] = useState(false);
+  const [validacionCierre, setValidacionCierre] = useState<ValidacionCierre | null>(null);
+  const [validandoCierre, setValidandoCierre] = useState(false);
+  const [confirmandoCierre, setConfirmandoCierre] = useState(false);
+
+  // ── Evolución ────────────────────────────────────────────────────────
+  const [evolucionCantidad, setEvolucionCantidad] = useState<number | null>(8);
+  const [evolucionDatos, setEvolucionDatos] = useState<PeriodoCerrado[]>([]);
+  const [records, setRecords] = useState<{
+    ventas: RecordHistorico | null;
+    beneficioNeto: RecordHistorico | null;
+    hamburguesasVendidas: RecordHistorico | null;
+  } | null>(null);
+  const [loadingEvolucion, setLoadingEvolucion] = useState(true);
+
   async function loadData(r: Rango) {
     const requestId = ++requestIdRef.current;
     setLoading(true);
@@ -223,6 +355,15 @@ export default function DashboardPage() {
       setGastos(gastosData);
       setRanking(rankingData);
       setIngredientes(ingredientesData);
+
+      // El estado de "cerrada / no cerrada" solo aplica a semanas — Mes,
+      // Trimestre, Año y Personalizado no tienen cierre propio.
+      if (r.tipo === 'semana') {
+        const periodo = await obtenerPeriodoActual(r.desde, r.hasta);
+        if (requestId === requestIdRef.current) setPeriodoCerradoActual(periodo);
+      } else {
+        setPeriodoCerradoActual(null);
+      }
     } catch (err) {
       if (requestId !== requestIdRef.current) return;
       setError(err instanceof Error ? err.message : 'Error al cargar el dashboard');
@@ -235,6 +376,31 @@ export default function DashboardPage() {
     loadData(rango);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rango]);
+
+  // Evolución: independiente del rango seleccionado arriba — siempre lee
+  // el histórico de semanas YA cerradas, según el filtro de cantidad.
+  async function loadEvolucion() {
+    setLoadingEvolucion(true);
+    try {
+      const [datos, recordsData] = await Promise.all([
+        obtenerEvolucion(evolucionCantidad),
+        obtenerRecords(),
+      ]);
+      setEvolucionDatos(datos);
+      setRecords(recordsData);
+    } catch {
+      // La sección de Evolución no es crítica para el resto del dashboard
+      // — si falla, no bloquea ni muestra el error global de arriba.
+      setEvolucionDatos([]);
+    } finally {
+      setLoadingEvolucion(false);
+    }
+  }
+
+  useEffect(() => {
+    loadEvolucion();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [evolucionCantidad]);
 
   function cambiarTipo(tipo: TipoRango) {
     setTipoSeleccionado(tipo);
@@ -296,6 +462,47 @@ export default function DashboardPage() {
   }
 
   const puedeNavegar = tipoSeleccionado !== 'personalizado' || (!!desdeInput && !!hastaInput);
+
+  // ── Flujo de cierre de período ──────────────────────────────────────
+
+  const semanaTerminada = tipoSeleccionado === 'semana' && !rango.esActual;
+
+  async function abrirModalCierre() {
+    if (!kpis) return;
+    setModalCierreAbierto(true);
+    setValidandoCierre(true);
+    setValidacionCierre(null);
+    try {
+      const v = await validarCierre(rango, kpis.actual);
+      setValidacionCierre(v);
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error al validar el cierre', 'error');
+      setModalCierreAbierto(false);
+    } finally {
+      setValidandoCierre(false);
+    }
+  }
+
+  async function confirmarCierre() {
+    if (!kpis) return;
+    setConfirmandoCierre(true);
+    try {
+      const r = await cerrarPeriodo(rango, kpis.actual);
+      if (!r.ok) {
+        showToast(r.mensaje, 'error');
+      } else {
+        showToast('Semana cerrada correctamente');
+        setModalCierreAbierto(false);
+        const periodo = await obtenerPeriodoActual(rango.desde, rango.hasta);
+        setPeriodoCerradoActual(periodo);
+        loadEvolucion();
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error al cerrar el período', 'error');
+    } finally {
+      setConfirmandoCierre(false);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -398,6 +605,21 @@ export default function DashboardPage() {
               Hoy
             </button>
           )}
+
+          {semanaTerminada &&
+            (periodoCerradoActual ? (
+              <span className="rounded-full bg-positive-bg px-3 py-1.5 text-xs font-medium text-positive">
+                ✓ Cerrada el{' '}
+                {new Date(periodoCerradoActual.cerradoEn).toLocaleDateString('es-AR')}
+              </span>
+            ) : (
+              <button
+                onClick={abrirModalCierre}
+                className="rounded-md bg-brand-light px-3 py-1.5 text-xs font-medium text-text-primary hover:opacity-90"
+              >
+                Cerrar semana
+              </button>
+            ))}
         </div>
       </div>
 
@@ -739,6 +961,251 @@ export default function DashboardPage() {
           </div>
         </div>
       ) : null}
+
+      {/* ── Evolución ──────────────────────────────────────────────────── */}
+      <div className="space-y-4">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h2 className="text-base font-semibold text-text-primary">Evolución</h2>
+          <div className="flex items-center gap-2 text-sm">
+            <span className="text-text-muted">Mostrar:</span>
+            <select
+              value={evolucionCantidad === null ? 'todo' : evolucionCantidad}
+              onChange={(e) =>
+                setEvolucionCantidad(e.target.value === 'todo' ? null : parseInt(e.target.value, 10))
+              }
+              className="rounded-md border border-border bg-surface px-2 py-1 text-sm text-text-primary"
+            >
+              <option value={8}>Últimas 8 semanas</option>
+              <option value={12}>Últimas 12 semanas</option>
+              <option value={26}>Últimas 26 semanas</option>
+              <option value="todo">Todo el histórico</option>
+            </select>
+          </div>
+        </div>
+
+        {loadingEvolucion ? (
+          <div className="py-12 text-center text-sm text-text-muted">Cargando evolución…</div>
+        ) : evolucionDatos.length < 2 ? (
+          <div className="rounded-lg border border-border bg-surface p-8 text-center">
+            <p className="text-sm text-text-muted">
+              Todavía no hay suficientes semanas cerradas para mostrar evolución. Cerrá la semana
+              actual o anteriores desde el selector de período arriba.
+            </p>
+          </div>
+        ) : (
+          <>
+            {/* Tarjeta de tendencia reciente */}
+            {(() => {
+              const ultima = evolucionDatos[evolucionDatos.length - 1];
+              const anterior = evolucionDatos[evolucionDatos.length - 2];
+              return (
+                <div className="rounded-lg border border-border bg-surface p-5">
+                  <h3 className="text-sm font-semibold text-text-primary">Tendencia reciente</h3>
+                  <p className="mt-1 text-xs text-text-muted">
+                    {ultima.label} vs. {anterior.label}
+                  </p>
+                  <div className="mt-3 grid grid-cols-1 gap-x-8 sm:grid-cols-2">
+                    <TendenciaItem
+                      label="Ventas"
+                      actual={ultima.ventas}
+                      anterior={anterior.ventas}
+                      formato={formatARS}
+                    />
+                    <TendenciaItem
+                      label="Beneficio neto"
+                      actual={ultima.beneficioNeto}
+                      anterior={anterior.beneficioNeto}
+                      formato={formatARS}
+                    />
+                    <TendenciaItem
+                      label="Margen neto"
+                      actual={ultima.margenNeto}
+                      anterior={anterior.margenNeto}
+                      formato={(n) => `${n.toFixed(1)}pp`}
+                    />
+                    <TendenciaItem
+                      label="ROAS"
+                      actual={ultima.roas}
+                      anterior={anterior.roas}
+                      formato={(n) => `${n.toFixed(2)}x`}
+                    />
+                    <TendenciaItem
+                      label="Publicidad % s/ventas"
+                      actual={ultima.publicidadPct}
+                      anterior={anterior.publicidadPct}
+                      formato={(n) => `${n.toFixed(1)}pp`}
+                      invertido
+                    />
+                    <TendenciaItem
+                      label="Costo por pedido"
+                      actual={ultima.costoPorPedido}
+                      anterior={anterior.costoPorPedido}
+                      formato={formatARS}
+                      invertido
+                    />
+                    <TendenciaItem
+                      label="Hamburguesas vendidas"
+                      actual={ultima.hamburguesasVendidas}
+                      anterior={anterior.hamburguesasVendidas}
+                      formato={(n) => `${n} uds`}
+                    />
+                    <TendenciaItem
+                      label="Beneficio por pedido"
+                      actual={ultima.beneficioPorPedido}
+                      anterior={anterior.beneficioPorPedido}
+                      formato={formatARS}
+                    />
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Grid de mini gráficos */}
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
+              <MiniGrafico
+                titulo="Ventas"
+                valores={evolucionDatos.map((p) => p.ventas)}
+                formato={formatARS}
+                record={records?.ventas}
+              />
+              <MiniGrafico
+                titulo="Beneficio neto"
+                valores={evolucionDatos.map((p) => p.beneficioNeto)}
+                formato={formatARS}
+                record={records?.beneficioNeto}
+              />
+              <MiniGrafico
+                titulo="Margen neto %"
+                valores={evolucionDatos.map((p) => p.margenNeto)}
+                formato={(n) => `${n.toFixed(1)}%`}
+              />
+              <MiniGrafico
+                titulo="ROAS"
+                valores={evolucionDatos.map((p) => p.roas)}
+                formato={(n) => `${n.toFixed(2)}x`}
+              />
+              <MiniGrafico
+                titulo="Publicidad % s/ventas"
+                valores={evolucionDatos.map((p) => p.publicidadPct)}
+                formato={(n) => `${n.toFixed(1)}%`}
+              />
+              <MiniGrafico
+                titulo="Costo por pedido"
+                valores={evolucionDatos.map((p) => p.costoPorPedido)}
+                formato={formatARS}
+              />
+              <MiniGrafico
+                titulo="Hamburguesas vendidas"
+                valores={evolucionDatos.map((p) => p.hamburguesasVendidas)}
+                formato={(n) => `${n} uds`}
+                record={records?.hamburguesasVendidas}
+              />
+              <MiniGrafico
+                titulo="Beneficio por pedido"
+                valores={evolucionDatos.map((p) => p.beneficioPorPedido)}
+                formato={formatARS}
+              />
+              <MiniGrafico
+                titulo="Resultado Delivery"
+                valores={evolucionDatos.map((p) => p.resultadoDelivery)}
+                formato={formatARS}
+              />
+            </div>
+          </>
+        )}
+      </div>
+
+      {/* ── Modal de cierre de período ───────────────────────────────────── */}
+      {modalCierreAbierto && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div
+            className="absolute inset-0 bg-black/20"
+            onClick={() => !confirmandoCierre && setModalCierreAbierto(false)}
+          />
+          <div className="relative w-full max-w-lg rounded-lg border border-border bg-surface p-5 shadow-xl">
+            <h3 className="text-sm font-semibold text-text-primary">
+              Cerrar {rango.label}
+            </h3>
+
+            {validandoCierre ? (
+              <div className="py-8 text-center text-sm text-text-muted">Validando…</div>
+            ) : validacionCierre ? (
+              <div className="mt-4 space-y-4">
+                {validacionCierre.yaCerrada ? (
+                  <div className="rounded-md border border-negative bg-negative-bg px-3 py-2 text-sm text-negative">
+                    Esta semana ya fue cerrada anteriormente.
+                  </div>
+                ) : (
+                  <>
+                    {validacionCierre.advertencias.length > 0 && (
+                      <div className="space-y-2">
+                        {validacionCierre.advertencias.map((a) => (
+                          <div
+                            key={a.codigo}
+                            className="rounded-md border border-border bg-warning-bg px-3 py-2 text-xs text-warning"
+                          >
+                            ⚠ {a.mensaje}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    <div className="rounded-md bg-surface-alt p-3 text-sm">
+                      <div className="mb-2 text-xs font-medium text-text-muted">
+                        Se va a congelar:
+                      </div>
+                      <div className="grid grid-cols-2 gap-x-4 gap-y-1">
+                        <span className="text-text-secondary">Ventas</span>
+                        <span className="text-right tabular-nums text-text-primary">
+                          {formatARS(validacionCierre.preview.ventas)}
+                        </span>
+                        <span className="text-text-secondary">Beneficio neto</span>
+                        <span className="text-right tabular-nums text-text-primary">
+                          {formatARS(validacionCierre.preview.beneficioNeto)}
+                        </span>
+                        <span className="text-text-secondary">Hamburguesas vendidas</span>
+                        <span className="text-right tabular-nums text-text-primary">
+                          {validacionCierre.preview.hamburguesasVendidas}
+                        </span>
+                        <span className="text-text-secondary">ROAS</span>
+                        <span className="text-right tabular-nums text-text-primary">
+                          {validacionCierre.preview.roas.toFixed(2)}x
+                        </span>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-text-muted">
+                      Una vez cerrada, esta semana no se vuelve a recalcular aunque cambien
+                      costos, recetas o configuración más adelante.
+                    </p>
+                  </>
+                )}
+
+                <div className="flex justify-end gap-2 pt-2">
+                  <button
+                    onClick={() => setModalCierreAbierto(false)}
+                    disabled={confirmandoCierre}
+                    className="rounded-md border border-border px-3 py-1.5 text-sm text-text-secondary hover:bg-surface-alt"
+                  >
+                    Cancelar
+                  </button>
+                  {!validacionCierre.yaCerrada && (
+                    <button
+                      onClick={confirmarCierre}
+                      disabled={confirmandoCierre}
+                      className="rounded-md bg-brand-light px-3 py-1.5 text-sm font-medium text-text-primary hover:opacity-90 disabled:opacity-40"
+                    >
+                      {confirmandoCierre ? 'Cerrando…' : 'Confirmar cierre'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            ) : null}
+          </div>
+        </div>
+      )}
+
+      <Toast />
     </div>
   );
 }

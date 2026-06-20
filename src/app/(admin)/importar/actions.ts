@@ -276,10 +276,19 @@ export async function importarPedidos(input: {
         .from('recetas')
         .select('producto_id, ingrediente_id, cantidad')
         .then((r) => r.data || []),
+      // FIX: el dedup de pedido_pedix_id debe ignorar pedidos que
+      // pertenecen a importaciones ANULADAS — de lo contrario, anular una
+      // importación y reimportar el mismo archivo (con datos corregidos,
+      // como un parser arreglado) hace que TODOS los pedidos se salten
+      // por "duplicados", aunque su importación original ya no cuenta
+      // para nada en el dashboard. El filtro usa el join implícito de
+      // PostgREST (importaciones!inner) para traer solo pedidos cuya
+      // importación tiene estado = 'activa'.
       admin
         .from('pedidos')
-        .select('pedido_pedix_id')
-        .then((r) => new Set((r.data || []).map((p) => p.pedido_pedix_id))),
+        .select('pedido_pedix_id, importaciones!inner(estado)')
+        .eq('importaciones.estado', 'activa')
+        .then((r) => new Set((r.data || []).map((p: any) => p.pedido_pedix_id))),
       admin
         .from('ingredientes')
         .select('id, factor_conversion')

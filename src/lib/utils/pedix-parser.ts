@@ -252,8 +252,18 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
   const colMedioPago = findColumn(pedidosSheet.headers, [
     'pago', 'medio', 'forma de pago',
   ]);
+  // FIX: el Excel real de Pedix usa "Cargos Envío" (plural) — el header
+  // normalizado a lowercase queda "cargos envío". Las variantes en
+  // singular ('cargo envío', 'costo envío', etc.) no hacían match porque
+  // .includes() busca el substring exacto: "cargos envío".includes("cargo
+  // envío") es false (la "s" de más rompe el match). Se agrega la forma
+  // plural real, sin sacar las anteriores por si el formato varía entre
+  // exportaciones de Pedix.
   const colEnvio = findColumn(pedidosSheet.headers, [
-    'costo envío', 'costo envio', 'envío cobrado', 'envio cobrado', 'cargo envío',
+    'cargos envío', 'cargos envio',
+    'costo envío', 'costo envio',
+    'envío cobrado', 'envio cobrado',
+    'cargo envío', 'cargo envio',
   ]);
   const colTotal = findColumn(pedidosSheet.headers, ['total']);
   const colEstado = findColumn(pedidosSheet.headers, [

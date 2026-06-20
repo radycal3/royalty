@@ -7,6 +7,8 @@ import { rangoAnterior, type Rango } from '@/lib/dashboard/rangos';
 
 export type KpisPeriodo = {
   pedidos: number;
+  hamburguesasVendidas: number;
+  hamburguesasPorPedido: number;
   ventas: number;
   costoIngredientes: number;
   beneficioBruto: number;
@@ -16,6 +18,7 @@ export type KpisPeriodo = {
   gastosTotal: number;
   gastoPublicidad: number;
   publicidadPct: number;
+  costoPorPedido: number;
   roas: number;
   costoConsumoInterno: number;
   enviosCobrados: number;
@@ -83,6 +86,7 @@ async function calcularKpis(
       importacion_id,
       envio_cobrado,
       pedidos_lineas (
+        producto_id,
         cantidad,
         precio_unitario_vendido,
         costo_unitario_calculado
@@ -98,10 +102,23 @@ async function calcularKpis(
 
   const activas = new Set((importaciones || []).map((i: any) => i.id));
 
+  // Productos categoría 'hamburguesa' — para distinguir "hamburguesas
+  // vendidas" de "unidades de cualquier producto" (bebidas, papas, etc.
+  // quedan afuera).
+  const { data: productosHamburguesa } = await supabase
+    .from('productos')
+    .select('id')
+    .eq('categoria', 'hamburguesa');
+
+  const idsHamburguesa = new Set(
+    (productosHamburguesa || []).map((p: any) => p.id)
+  );
+
   let pedidos = 0;
   let ventas = 0;
   let costoIngredientes = 0;
   let enviosCobrados = 0;
+  let hamburguesasVendidas = 0;
 
   for (const p of ventasData || []) {
     if (!activas.has(p.importacion_id)) continue;
@@ -113,6 +130,9 @@ async function calcularKpis(
     for (const l of p.pedidos_lineas || []) {
       ventas += l.precio_unitario_vendido * l.cantidad;
       costoIngredientes += l.costo_unitario_calculado * l.cantidad;
+      if (idsHamburguesa.has(l.producto_id)) {
+        hamburguesasVendidas += l.cantidad;
+      }
     }
   }
 
@@ -183,6 +203,8 @@ async function calcularKpis(
 
   return {
     pedidos,
+    hamburguesasVendidas,
+    hamburguesasPorPedido: pedidos > 0 ? hamburguesasVendidas / pedidos : 0,
     ventas,
     costoIngredientes,
     beneficioBruto,
@@ -192,6 +214,7 @@ async function calcularKpis(
     gastosTotal,
     gastoPublicidad,
     publicidadPct: ventas > 0 ? (gastoPublicidad / ventas) * 100 : 0,
+    costoPorPedido: pedidos > 0 ? gastoPublicidad / pedidos : 0,
     roas: gastoPublicidad > 0 ? ventas / gastoPublicidad : 0,
     costoConsumoInterno,
     enviosCobrados,
