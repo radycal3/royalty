@@ -255,7 +255,7 @@ export default function ConfiguracionPage() {
           onGuardar={handleGuardarAlertas}
           guardando={guardandoAlertas}
         >
-          <Field label="Margen mínimo (%)" hint="Por debajo de este valor se considera bajo">
+          <Field label="Margen mínimo — zona Alerta (%)" hint="Por debajo de este valor se considera zona Problema">
             <Input
               type="number"
               min={0}
@@ -263,6 +263,34 @@ export default function ConfiguracionPage() {
               value={alertas.alertaMargenMinimo}
               onChange={(e) =>
                 setAlertas({ ...alertas, alertaMargenMinimo: parseFloat(e.target.value) || 0 })
+              }
+            />
+          </Field>
+          <Field
+            label="Margen mínimo — zona Objetivo (%)"
+            hint="Entre Alerta y Objetivo: margen aceptable pero con margen de mejora"
+          >
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={alertas.margenObjetivoMinimo}
+              onChange={(e) =>
+                setAlertas({ ...alertas, margenObjetivoMinimo: parseFloat(e.target.value) || 0 })
+              }
+            />
+          </Field>
+          <Field
+            label="Margen mínimo — zona Excelente (%)"
+            hint="Por encima de este valor el negocio está en zona Excelente de rentabilidad"
+          >
+            <Input
+              type="number"
+              min={0}
+              max={100}
+              value={alertas.margenExcelenteMinimo}
+              onChange={(e) =>
+                setAlertas({ ...alertas, margenExcelenteMinimo: parseFloat(e.target.value) || 0 })
               }
             />
           </Field>

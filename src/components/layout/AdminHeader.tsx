@@ -33,7 +33,7 @@ export default async function AdminHeader() {
   const estadoBadge = periodo?.estado === 'abierto'
 
   return (
-    <header className="h-14 bg-surface border-b border-border flex items-center justify-between px-6">
+    <header className="h-14 bg-surface border-b border-border flex items-center justify-between px-6 print:hidden">
       <div className="flex items-center gap-3">
         <span className="text-sm font-medium text-text-secondary">{periodoLabel}</span>
         {periodo && (

@@ -2,7 +2,7 @@
 
 import { createClient } from '@/lib/supabase/server';
 import type { Rango } from '@/lib/dashboard/rangos';
-import type { KpisPeriodo } from '../dashboard/actions';
+import type { KpisPeriodo, ProductoRanking, GastoDesglose } from '../dashboard/actions';
 
 // ─── Types ───────────────────────────────────────────────────────────────
 
@@ -108,7 +108,14 @@ export async function validarCierre(rango: Rango, kpis: KpisPeriodo): Promise<Va
 
 export async function cerrarPeriodo(
   rango: Rango,
-  kpis: KpisPeriodo
+  kpis: KpisPeriodo,
+  // Detalle a congelar junto con el período — mismos datos que ya se ven
+  // en el dashboard al momento de cerrar. Si no se pasan (compatibilidad
+  // hacia atrás), el período se cierra igual pero sin detalle — queda
+  // como "sin detalle disponible" para la Auditoría, nunca como "detalle
+  // en cero".
+  productos?: ProductoRanking[],
+  gastos?: GastoDesglose[]
 ): Promise<{ ok: true } | { ok: false; mensaje: string }> {
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
@@ -118,36 +125,83 @@ export async function cerrarPeriodo(
     return { ok: false, mensaje: 'Solo se pueden cerrar períodos de tipo semana.' };
   }
 
-  const { error } = await supabase.from('periodos').insert({
-    tipo: 'semana',
-    desde: rango.desde,
-    hasta: rango.hasta,
-    label: rango.label,
-    pedidos: kpis.pedidos,
-    hamburguesas_vendidas: kpis.hamburguesasVendidas,
-    hamburguesas_por_pedido: kpis.hamburguesasPorPedido,
-    ticket_promedio: kpis.ticketPromedio,
-    costo_por_pedido: kpis.costoPorPedido,
-    ventas: kpis.ventas,
-    beneficio_bruto: kpis.beneficioBruto,
-    beneficio_neto: kpis.beneficioNeto,
-    beneficio_por_pedido: kpis.netoPorPedido,
-    margen_bruto: kpis.margenBruto,
-    margen_neto: kpis.margenNeto,
-    roas: kpis.roas,
-    publicidad_pct: kpis.publicidadPct,
-    resultado_delivery: kpis.resultadoDelivery,
-    cerrado_por: user.user.id,
-  });
+  const { data: periodoInsertado, error } = await supabase
+    .from('periodos')
+    .insert({
+      tipo: 'semana',
+      desde: rango.desde,
+      hasta: rango.hasta,
+      label: rango.label,
+      pedidos: kpis.pedidos,
+      hamburguesas_vendidas: kpis.hamburguesasVendidas,
+      hamburguesas_por_pedido: kpis.hamburguesasPorPedido,
+      ticket_promedio: kpis.ticketPromedio,
+      costo_por_pedido: kpis.costoPorPedido,
+      ventas: kpis.ventas,
+      beneficio_bruto: kpis.beneficioBruto,
+      beneficio_neto: kpis.beneficioNeto,
+      beneficio_por_pedido: kpis.netoPorPedido,
+      margen_bruto: kpis.margenBruto,
+      margen_neto: kpis.margenNeto,
+      roas: kpis.roas,
+      publicidad_pct: kpis.publicidadPct,
+      resultado_delivery: kpis.resultadoDelivery,
+      cerrado_por: user.user.id,
+    })
+    .select('id')
+    .single();
 
-  if (error) {
-    const yaExiste = error.code === '23505';
+  if (error || !periodoInsertado) {
+    const yaExiste = error?.code === '23505';
     return {
       ok: false,
-      mensaje: yaExiste
-        ? 'Esta semana ya fue cerrada.'
-        : error.message,
+      mensaje: yaExiste ? 'Esta semana ya fue cerrada.' : error?.message || 'Error al cerrar',
     };
+  }
+
+  const periodoId = periodoInsertado.id;
+
+  // Detalle de productos — best effort: si esto falla, el período YA
+  // quedó cerrado (la fila de 'periodos' es la fuente de verdad de los
+  // totales). No se revierte el cierre por un fallo acá, pero se informa
+  // para que quede claro que el detalle no se guardó.
+  if (productos && productos.length > 0) {
+    const filasProductos = productos.map((p) => ({
+      periodo_id: periodoId,
+      producto_nombre: p.nombre,
+      unidades: p.unidades,
+      venta: p.venta,
+      costo: p.costo,
+      beneficio: p.beneficio,
+      margen: p.margen,
+      participacion: p.participacion,
+    }));
+    const { error: errorProductos } = await supabase
+      .from('periodos_productos')
+      .insert(filasProductos);
+    if (errorProductos) {
+      return {
+        ok: false,
+        mensaje: `Período cerrado, pero falló al guardar el detalle de productos: ${errorProductos.message}`,
+      };
+    }
+  }
+
+  if (gastos && gastos.length > 0) {
+    const filasGastos = gastos.map((g) => ({
+      periodo_id: periodoId,
+      tipo: g.tipo,
+      categoria: g.categoria,
+      total: g.total,
+      legacy: g.legacy,
+    }));
+    const { error: errorGastos } = await supabase.from('periodos_gastos').insert(filasGastos);
+    if (errorGastos) {
+      return {
+        ok: false,
+        mensaje: `Período cerrado, pero falló al guardar el detalle de gastos: ${errorGastos.message}`,
+      };
+    }
   }
 
   return { ok: true };
@@ -259,5 +313,53 @@ export async function obtenerRecords(): Promise<{
     ventas: maxPor('ventas'),
     beneficioNeto: maxPor('beneficio_neto'),
     hamburguesasVendidas: maxPor('hamburguesas_vendidas'),
+  };
+}
+
+// ─── Bandas de salud del gráfico de Margen Neto ──────────────────────────
+// Los 3 umbrales definen las 4 zonas del gráfico de área:
+//   Problema  : margen_neto < alertaMinimo
+//   Objetivo  : alertaMinimo <= margen_neto < objetivoMinimo
+//   Excelente : margen_neto >= excelenteMinimo
+//
+// alertaMinimo reutiliza alerta_margen_minimo (ya existente) para no
+// duplicar el mismo concepto en dos claves distintas.
+
+export type BandasMargen = {
+  alertaMinimo: number;    // = alerta_margen_minimo (ya existía)
+  objetivoMinimo: number;  // = margen_objetivo_minimo (nuevo)
+  excelenteMinimo: number; // = margen_excelente_minimo (nuevo)
+};
+
+export async function obtenerBandasMargen(): Promise<BandasMargen> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data, error } = await supabase
+    .from('configuracion')
+    .select('clave, valor')
+    .in('clave', [
+      'alerta_margen_minimo',
+      'margen_objetivo_minimo',
+      'margen_excelente_minimo',
+    ]);
+
+  if (error) throw new Error(error.message);
+
+  const map = new Map<string, string>(
+    (data || []).map((c: any) => [c.clave, c.valor])
+  );
+
+  const num = (clave: string, def: number) => {
+    const v = map.get(clave);
+    const n = v !== undefined ? parseFloat(v) : NaN;
+    return Number.isFinite(n) ? n : def;
+  };
+
+  return {
+    alertaMinimo: num('alerta_margen_minimo', 40),
+    objetivoMinimo: num('margen_objetivo_minimo', 50),
+    excelenteMinimo: num('margen_excelente_minimo', 60),
   };
 }

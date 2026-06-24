@@ -14,6 +14,9 @@ export type PedidoParsed = {
   fecha: string;          // YYYY-MM-DD
   hora: string | null;
   cliente: string | null;
+  celular: string | null;       // Normalizado: solo dígitos, sin guiones ni espacios
+  celularRaw: string | null;    // Valor original de Pedix, sin tocar, para auditoría
+  direccion: string | null;
   tipoEntrega: string | null;
   medioPago: string | null;
   envioCobrado: number;
@@ -191,6 +194,24 @@ function parseHora(value: any): string | null {
   return str || null;
 }
 
+/**
+ * Normaliza un número de celular: elimina todo lo que no sea dígito.
+ * Ejemplos:
+ *   "341-621-4667"  → "3416214667"
+ *   "3 413089774"   → "3413089774"
+ *   "3466-633942"   → "3466633942"
+ *   ""              → null
+ *   null            → null
+ *
+ * Devuelve null si el resultado tiene menos de 6 dígitos (probablemente
+ * no es un número real), para no guardar basura como identificador.
+ */
+function normalizarCelular(value: any): string | null {
+  if (value == null || value === '') return null;
+  const str = String(value).replace(/\D/g, ''); // quita todo lo que no es dígito
+  return str.length >= 6 ? str : null;
+}
+
 // ─── Parser principal ──────────────────────────────────────────────────────
 
 export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
@@ -245,6 +266,14 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
   const colHora = findColumn(pedidosSheet.headers, ['hora']);
   const colCliente = findColumn(pedidosSheet.headers, [
     'cliente', 'nombre', 'comprador',
+  ]);
+  // "Celular" es el nombre exacto confirmado en el Excel real de Pedix.
+  // Se agregan variantes por si cambia en futuras exportaciones.
+  const colCelular = findColumn(pedidosSheet.headers, [
+    'celular', 'teléfono', 'telefono', 'tel', 'phone', 'móvil', 'movil',
+  ]);
+  const colDireccion = findColumn(pedidosSheet.headers, [
+    'dirección', 'direccion', 'address', 'domicilio',
   ]);
   const colTipoEntrega = findColumn(pedidosSheet.headers, [
     'entrega', 'tipo', 'envío', 'envio', 'delivery', 'retiro',
@@ -430,11 +459,17 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
       // Igual lo incluimos con líneas vacías — el preview mostrará la advertencia
     }
 
+    const celularRaw =
+      colCelular !== -1 ? String(row[colCelular] ?? '').trim() || null : null;
+
     const pedido: PedidoParsed = {
       pedidoId,
       fecha,
       hora: colHora !== -1 ? parseHora(row[colHora]) : null,
       cliente: colCliente !== -1 ? String(row[colCliente] ?? '').trim() || null : null,
+      celular: normalizarCelular(celularRaw),
+      celularRaw,
+      direccion: colDireccion !== -1 ? String(row[colDireccion] ?? '').trim() || null : null,
       tipoEntrega:
         colTipoEntrega !== -1
           ? String(row[colTipoEntrega] ?? '').trim() || null

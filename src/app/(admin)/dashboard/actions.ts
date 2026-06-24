@@ -29,6 +29,10 @@ export type KpisPeriodo = {
   margenNeto: number;
   ticketPromedio: number;
   netoPorPedido: number;
+  // Métricas de clientes repetidores en el período
+  pedidosRepetidores: number;   // pedidos de clientes con historial previo al rango
+  ventasRepetidores: number;    // ventas generadas por esos pedidos
+  pctVentasRepetidores: number; // ventasRepetidores / ventas * 100
 };
 
 export type KpisConDelta = {
@@ -85,6 +89,7 @@ async function calcularKpis(
       id,
       importacion_id,
       envio_cobrado,
+      cliente_id,
       pedidos_lineas (
         producto_id,
         cantidad,
@@ -101,6 +106,22 @@ async function calcularKpis(
     .eq('estado', 'activa');
 
   const activas = new Set((importaciones || []).map((i: any) => i.id));
+
+  // Clientes que ya tenían al menos 1 pedido ANTES del inicio del rango —
+  // son los "repetidores conocidos" para este período.
+  // Se excluyen clientes sin ID (pedidos sin celular identificado).
+  const { data: clientesPrevios } = await supabase
+    .from('pedidos')
+    .select('cliente_id, importacion_id')
+    .not('cliente_id', 'is', null)
+    .lt('fecha', desde);
+
+  // Solo clientes con pedidos previos en importaciones activas
+  const clientesConHistorial = new Set(
+    (clientesPrevios || [])
+      .filter((p: any) => activas.has(p.importacion_id))
+      .map((p: any) => p.cliente_id)
+  );
 
   // Productos categoría 'hamburguesa' — para distinguir "hamburguesas
   // vendidas" de "unidades de cualquier producto" (bebidas, papas, etc.
@@ -119,6 +140,8 @@ async function calcularKpis(
   let costoIngredientes = 0;
   let enviosCobrados = 0;
   let hamburguesasVendidas = 0;
+  let pedidosRepetidores = 0;
+  let ventasRepetidores = 0;
 
   for (const p of ventasData || []) {
     if (!activas.has(p.importacion_id)) continue;
@@ -127,13 +150,19 @@ async function calcularKpis(
     // por pedido, NO dentro del loop de pedidos_lineas (que lo duplicaría
     // por cada línea, ver riesgo documentado en el handoff).
     enviosCobrados += p.envio_cobrado || 0;
+    const esRepetidor = p.cliente_id && clientesConHistorial.has(p.cliente_id);
+    if (esRepetidor) pedidosRepetidores++;
+    let ventasPedido = 0;
     for (const l of p.pedidos_lineas || []) {
-      ventas += l.precio_unitario_vendido * l.cantidad;
+      const venta = l.precio_unitario_vendido * l.cantidad;
+      ventas += venta;
+      ventasPedido += venta;
       costoIngredientes += l.costo_unitario_calculado * l.cantidad;
       if (idsHamburguesa.has(l.producto_id)) {
         hamburguesasVendidas += l.cantidad;
       }
     }
+    if (esRepetidor) ventasRepetidores += ventasPedido;
   }
 
   // Q2: Gastos (cadetería ya NO se lee de acá — ver Q4)
@@ -225,6 +254,9 @@ async function calcularKpis(
     margenNeto: ventas > 0 ? (beneficioNeto / ventas) * 100 : 0,
     ticketPromedio: pedidos > 0 ? ventas / pedidos : 0,
     netoPorPedido: pedidos > 0 ? beneficioNeto / pedidos : 0,
+    pedidosRepetidores,
+    ventasRepetidores,
+    pctVentasRepetidores: ventas > 0 ? (ventasRepetidores / ventas) * 100 : 0,
   };
 }
 
@@ -416,4 +448,159 @@ export async function obtenerConsumoIngredientes(
       };
     })
     .sort((a, b) => b.costo - a.costo);
+}
+
+// ─── Salud de Clientes v3 ─────────────────────────────────────────────────
+// Reemplaza el bloque anterior en dashboard/actions.ts
+// Cambios: altoValorDetalle con celular + diasSinComprar,
+//          topRepetidores con celular + ultimoPedido
+
+export type TendenciaVentana = {
+  nClientes: number;
+  nRetuvieron: number;
+  tasaRetencion: number;
+  pctFacturacion: number;
+  ventasTotal: number;
+  ventasRepetidores: number;
+  desde: string;
+  hasta: string;
+};
+
+export type ClienteValioso = {
+  nombre: string;
+  celular: string;             // formato +54XXXXXXXXXX
+  totalPedidos: number;
+  ventasTotales: number;
+  ultimoPedido: string;        // fecha ISO
+  diasSinComprar?: number;     // solo en alto valor en riesgo
+};
+
+export type SaludClientes = {
+  fechaCalculo: string;
+  ventanaDias: number;
+
+  // Conteos por categoría
+  totalUnicos: number;
+  recienteSinVeredicto: number;
+  nuevoPerdido: number;
+  activo: number;
+  enRiesgo: number;
+
+  // Alto valor en riesgo
+  altoValorEnRiesgo: number;
+  altoValorVentasHistoricas: number;
+  altoValorDetalle: ClienteValioso[];  // lista accionable con teléfono
+
+  // Valor económico de clientes en riesgo
+  enRiesgoVentasHistoricas: number;
+  enRiesgoPedidosTotales: number;
+  enRiesgoTicketPromedio: number;
+
+  // Métricas estratégicas globales
+  pctFacturacionRepetidores: number;
+  ventasRepetidores: number;
+  ventasNuevos: number;
+  pctClientesRepetidores: number;
+  tasaRetencion: number;
+  retencionCartera: number;
+
+  // Estadísticas de intervalo entre compras
+  medianaDiasEntreCompras: number;
+  promedioDiasEntreCompras: number;
+
+  // Tendencia por ventanas rodantes de 28 días
+  tendActual: TendenciaVentana;
+  tendAnterior: TendenciaVentana;
+
+  // Top clientes más valiosos (con celular y último pedido)
+  topRepetidores: ClienteValioso[];
+};
+
+export async function obtenerSaludClientes(): Promise<SaludClientes> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data: configRows } = await supabase
+    .from('configuracion')
+    .select('clave, valor')
+    .in('clave', ['cliente_ventana_activo_dias']);
+
+  const ventanaDias = parseInt(
+    configRows?.find(
+      (r: { clave: string; valor: string }) => r.clave === 'cliente_ventana_activo_dias'
+    )?.valor ?? '21',
+    10
+  );
+
+  const { data, error } = await supabase.rpc('obtener_salud_clientes', {
+    p_ventana_dias: ventanaDias,
+  });
+
+  if (error) throw new Error(error.message);
+
+  const r = data as Record<string, unknown>;
+
+  function mapCliente(t: Record<string, unknown>): ClienteValioso {
+    return {
+      nombre:         String(t.nombre ?? ''),
+      celular:        String(t.celular ?? ''),
+      totalPedidos:   Number(t.total_pedidos),
+      ventasTotales:  Number(t.ventas_totales),
+      ultimoPedido:   String(t.ultimo_pedido ?? ''),
+      diasSinComprar: t.dias_sin_comprar !== undefined ? Number(t.dias_sin_comprar) : undefined,
+    };
+  }
+
+  return {
+    fechaCalculo:   String(r.fecha_calculo),
+    ventanaDias:    Number(r.ventana_dias),
+
+    totalUnicos:              Number(r.total_unicos),
+    recienteSinVeredicto:     Number(r.reciente_sin_veredicto),
+    nuevoPerdido:             Number(r.nuevo_perdido),
+    activo:                   Number(r.activo),
+    enRiesgo:                 Number(r.en_riesgo),
+
+    altoValorEnRiesgo:           Number(r.alto_valor_en_riesgo),
+    altoValorVentasHistoricas:   Number(r.alto_valor_ventas_historicas),
+    altoValorDetalle:            (r.alto_valor_detalle as Array<Record<string, unknown>> ?? []).map(mapCliente),
+
+    enRiesgoVentasHistoricas:  Number(r.en_riesgo_ventas_historicas),
+    enRiesgoPedidosTotales:    Number(r.en_riesgo_pedidos_totales),
+    enRiesgoTicketPromedio:    Number(r.en_riesgo_ticket_promedio),
+
+    pctFacturacionRepetidores: Number(r.pct_facturacion_repetidores),
+    ventasRepetidores:         Number(r.ventas_repetidores),
+    ventasNuevos:              Number(r.ventas_nuevos),
+    pctClientesRepetidores:    Number(r.pct_clientes_repetidores),
+    tasaRetencion:             Number(r.tasa_retencion),
+    retencionCartera:          Number(r.retencion_cartera),
+
+    medianaDiasEntreCompras:   Number(r.mediana_dias_entre_compras),
+    promedioDiasEntreCompras:  Number(r.promedio_dias_entre_compras),
+
+    tendActual: {
+      nClientes:         Number(r.tend_actual_n_clientes),
+      nRetuvieron:       Number(r.tend_actual_n_retuvieron),
+      tasaRetencion:     Number(r.tend_actual_tasa_retencion),
+      pctFacturacion:    Number(r.tend_actual_pct_facturacion),
+      ventasTotal:       Number(r.tend_actual_ventas_total),
+      ventasRepetidores: Number(r.tend_actual_ventas_rep),
+      desde:             String(r.tend_actual_desde),
+      hasta:             String(r.tend_actual_hasta),
+    },
+    tendAnterior: {
+      nClientes:         Number(r.tend_anterior_n_clientes),
+      nRetuvieron:       Number(r.tend_anterior_n_retuvieron),
+      tasaRetencion:     Number(r.tend_anterior_tasa_retencion),
+      pctFacturacion:    Number(r.tend_anterior_pct_facturacion),
+      ventasTotal:       Number(r.tend_anterior_ventas_total),
+      ventasRepetidores: Number(r.tend_anterior_ventas_rep),
+      desde:             String(r.tend_anterior_desde),
+      hasta:             String(r.tend_anterior_hasta),
+    },
+
+    topRepetidores: (r.top_repetidores as Array<Record<string, unknown>> ?? []).map(mapCliente),
+  };
 }

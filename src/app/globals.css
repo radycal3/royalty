@@ -32,3 +32,89 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
+
+/* ─── Estilos de impresión / exportación PDF ─────────────────────────────
+   Se activan con window.print() desde el botón "Exportar PDF" del dashboard.
+──────────────────────────────────────────────────────────────────────── */
+
+/* Suprimir header/footer del browser (URL, fecha) en todos los browsers
+   que lo soporten. Chrome/Edge: desactivar "Encabezados y pies de página"
+   en el diálogo de impresión. */
+@page {
+  margin: 1.4cm 1.6cm;
+  size: A4 portrait;
+}
+
+@media print {
+  /* Forzar colores — preserva verde/rojo de deltas y semáforos */
+  * {
+    -webkit-print-color-adjust: exact !important;
+    print-color-adjust: exact !important;
+  }
+
+  /* Body limpio */
+  body {
+    background-color: #ffffff !important;
+    font-size: 10.5pt;
+    line-height: 1.4;
+  }
+
+  /* Ocultar con data-print="hidden" */
+  [data-print="hidden"] {
+    display: none !important;
+  }
+
+  /* Mostrar solo en impresión */
+  [data-print="only"] {
+    display: block !important;
+  }
+
+  /* Tabs de evolución: siempre visibles en impresión */
+  [data-print="section"] {
+    display: block !important;
+    break-inside: avoid;
+    page-break-inside: avoid;
+  }
+
+  /* Separador visual entre secciones de tabs */
+  [data-print="section"] + [data-print="section"] {
+    margin-top: 1.2rem;
+    padding-top: 1.2rem;
+    border-top: 1px solid #e5e7eb;
+  }
+
+  /* Bordes conservados */
+  .rounded-lg, .rounded-md {
+    border-radius: 4px !important;
+  }
+
+  /* Ocultar controles interactivos — excepto los marcados con data-print="keep" */
+  button:not([data-print="keep"]),
+  input,
+  select {
+    display: none !important;
+  }
+
+  /* Tablas sin overflow */
+  table {
+    width: 100% !important;
+    overflow: visible !important;
+  }
+
+  /* SVG sparklines */
+  svg {
+    overflow: visible !important;
+  }
+
+  /* WhatsApp links en tabla: mostrar como texto, no como botón */
+  a[href*="wa.me"] {
+    border: none !important;
+    padding: 0 !important;
+    font-size: 9pt;
+    color: #5f6578 !important;
+    text-decoration: none !important;
+  }
+  a[href*="wa.me"]::after {
+    content: " (WhatsApp)";
+  }
+}

@@ -17,10 +17,13 @@ import {
   obtenerGastosDesglose,
   obtenerRankingProductos,
   obtenerConsumoIngredientes,
+  obtenerSaludClientes,
   type KpisConDelta,
   type GastoDesglose,
   type ProductoRanking,
   type IngredienteConsumo,
+  type SaludClientes,
+  type ClienteValioso,
 } from './actions';
 import {
   validarCierre,
@@ -28,10 +31,19 @@ import {
   obtenerPeriodoActual,
   obtenerEvolucion,
   obtenerRecords,
+  obtenerBandasMargen,
   type ValidacionCierre,
   type PeriodoCerrado,
   type RecordHistorico,
+  type BandasMargen,
 } from '../evolucion/actions';
+import {
+  obtenerSemaforoEnVivo,
+  compararUltimasDosSemanas,
+  type Semaforo,
+  type EstadoSalud,
+  type ComparacionPeriodos,
+} from '../auditoria/actions';
 import { formatARS, formatPercent } from '@/lib/utils/format';
 import { EmptyState, useToast } from '@/components/ui';
 
@@ -294,6 +306,1388 @@ function TendenciaItem({
   );
 }
 
+// ─── Semáforo de salud ────────────────────────────────────────────────
+
+const COLORES_SALUD: Record<EstadoSalud, string> = {
+  verde: 'bg-positive-bg text-positive',
+  amarillo: 'bg-warning-bg text-warning',
+  rojo: 'bg-negative-bg text-negative',
+  sin_datos: 'bg-surface-alt text-text-muted',
+};
+
+const ICONOS_SALUD: Record<EstadoSalud, string> = {
+  verde: '●',
+  amarillo: '●',
+  rojo: '●',
+  sin_datos: '○',
+};
+
+const LABELS_INDICADOR: Record<string, string> = {
+  margen_neto: 'Margen neto',
+  publicidad: 'Publicidad',
+  delivery: 'Delivery',
+  roas: 'ROAS',
+  tendencia_ventas: 'Tendencia de ventas',
+};
+
+function SemaforoSalud({ semaforo }: { semaforo: Semaforo }) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-5">
+      <div className="mb-3 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-text-primary">Salud del negocio</h2>
+        {semaforo.fuente === 'en_vivo' ? (
+          <span className="rounded-full bg-warning-bg px-2.5 py-1 text-xs font-medium text-warning">
+            Semana en curso — valores sujetos a cambio hasta el cierre
+          </span>
+        ) : (
+          <span className="rounded-full bg-positive-bg px-2.5 py-1 text-xs font-medium text-positive">
+            Snapshot congelado
+          </span>
+        )}
+      </div>
+
+      <div className="space-y-2">
+        {semaforo.indicadores.map((ind) => (
+          <div
+            key={ind.nombre}
+            className="flex items-start gap-3 rounded-md border border-border/50 p-3"
+          >
+            <span
+              className={`mt-0.5 flex h-6 w-6 flex-shrink-0 items-center justify-center rounded-full text-xs ${COLORES_SALUD[ind.estado]}`}
+            >
+              {ICONOS_SALUD[ind.estado]}
+            </span>
+            <div className="flex-1">
+              <div className="text-sm font-medium text-text-primary">
+                {LABELS_INDICADOR[ind.nombre]}
+              </div>
+              <div className="mt-0.5 text-xs text-text-secondary">{ind.explicacion}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// ─── "¿Qué cambió?" — comparación entre períodos cerrados ───────────────
+
+// Genera el resumen ejecutivo automático a partir de los datos ya calculados.
+// Reglas: sin inventar causalidad, solo describir los hechos en orden de impacto.
+function generarResumenEjecutivo(comparacion: ComparacionPeriodos): {
+  subio: boolean;
+  frases: string[];
+} {
+  const { deltaBeneficioNeto, beneficioNetoA, contribuciones } = comparacion;
+  const subio = deltaBeneficioNeto >= 0;
+
+  // Separar impulsores y frenos por impacto absoluto
+  const positivas = [...contribuciones]
+    .filter((c) => c.impactoEnNeto > 1)
+    .sort((a, b) => b.impactoEnNeto - a.impactoEnNeto);
+  const negativas = [...contribuciones]
+    .filter((c) => c.impactoEnNeto < -1)
+    .sort((a, b) => a.impactoEnNeto - b.impactoEnNeto);
+
+  // Genera la frase correcta según la naturaleza del componente:
+  // - Ventas/Delivery: subir es positivo → "subieron / bajaron"
+  // - Costos/Gastos: bajar es positivo para el neto → describir el movimiento del costo,
+  //   no del impacto ("bajaron $X" en vez de "aportaron $X")
+  function describir(c: ComparacionPeriodos['contribuciones'][0], esImpulsor: boolean): string {
+    const monto = formatARS(Math.abs(c.impactoEnNeto));
+    const delta = c.valorB - c.valorA;
+    const subioElValor = delta > 0;
+
+    switch (c.componente) {
+      case 'ventas':
+        return esImpulsor
+          ? `Las ventas subieron ${formatARS(delta)} — principal impulsor del resultado.`
+          : `Las ventas cayeron ${formatARS(Math.abs(delta))} — principal freno del resultado.`;
+      case 'costoIngredientes':
+        return esImpulsor
+          ? `El costo de ingredientes bajó ${monto}, mejorando el margen bruto.`
+          : `El costo de ingredientes subió ${monto}, presionando el margen bruto.`;
+      case 'gastosVariables':
+        return esImpulsor
+          ? `Los gastos variables bajaron ${formatARS(Math.abs(delta))}, liberando ${monto} de margen.`
+          : `Los gastos variables subieron ${formatARS(delta)}, restando ${monto} al resultado.`;
+      case 'gastosFijos':
+        return esImpulsor
+          ? `Los gastos fijos bajaron ${formatARS(Math.abs(delta))}, aportando ${monto} al resultado.`
+          : `Los gastos fijos subieron ${formatARS(delta)}, restando ${monto} al resultado.`;
+      case 'costoConsumoInterno':
+        return esImpulsor
+          ? `El consumo interno bajó ${monto}.`
+          : `El consumo interno subió ${monto}.`;
+      case 'resultadoDelivery':
+        return esImpulsor
+          ? `El resultado de delivery mejoró ${monto}.`
+          : `El resultado de delivery empeoró ${monto}.`;
+      default:
+        return esImpulsor
+          ? `${c.label} mejoró ${monto}.`
+          : `${c.label} empeoró ${monto}.`;
+    }
+  }
+
+  const frases: string[] = [];
+
+  if (positivas.length > 0) frases.push(describir(positivas[0], true));
+  if (negativas.length > 0) frases.push(describir(negativas[0], false));
+
+  // Segundo freno relevante (>20% del primero)
+  if (
+    negativas.length > 1 &&
+    Math.abs(negativas[1].impactoEnNeto) > Math.abs(negativas[0].impactoEnNeto) * 0.2
+  ) {
+    frases.push(describir(negativas[1], false));
+  }
+
+  // Encabezado con variación absoluta y porcentual
+  if (beneficioNetoA !== 0 && Math.abs(beneficioNetoA) > 1000) {
+    const pct = (deltaBeneficioNeto / Math.abs(beneficioNetoA)) * 100;
+    const pctStr = `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
+    frases.unshift(
+      `El beneficio neto ${subio ? 'mejoró' : 'cayó'} ${formatARS(Math.abs(deltaBeneficioNeto))} (${pctStr}) respecto a la semana anterior.`
+    );
+  } else {
+    frases.unshift(
+      `El beneficio neto ${subio ? 'mejoró' : 'cayó'} ${formatARS(Math.abs(deltaBeneficioNeto))} respecto a la semana anterior.`
+    );
+  }
+
+  return { subio, frases };
+}
+
+function FilaContribucion({
+  label, valorA, valorB, impacto,
+}: {
+  label: string; valorA: number; valorB: number; impacto: number;
+}) {
+  const impactoPositivo = impacto > 0;
+  const sinCambio = Math.abs(impacto) < 1;
+  // El valor subyacente subió o bajó — dato independiente del impacto en neto
+  // (un gasto que baja tiene impacto positivo, pero el valor bajó)
+  const valorSubio = valorB > valorA;
+  const deltaValor = valorB - valorA;
+
+  return (
+    <div className="flex items-center justify-between py-2.5 text-sm">
+      <div className="flex items-center gap-2">
+        <span className="text-text-secondary">{label}</span>
+        {!sinCambio && (
+          <span className="text-xs text-text-muted">
+            {valorSubio ? '↑' : '↓'} {formatARS(Math.abs(deltaValor))}
+          </span>
+        )}
+      </div>
+      <div className="flex items-center gap-4">
+        <span className="text-xs text-text-muted tabular-nums">
+          {formatARS(valorA)} → {formatARS(valorB)}
+        </span>
+        <span className={`w-28 text-right font-semibold tabular-nums ${
+          sinCambio ? 'text-text-muted' : impactoPositivo ? 'text-positive' : 'text-negative'
+        }`}>
+          {sinCambio ? '—' : impactoPositivo ? '+' : ''}{formatARS(impacto)}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+// Sección de productos o gastos — separada en impulsores y frenos
+function SeccionDestacados({
+  titulo,
+  items,
+  cambioRef,
+}: {
+  titulo: string;
+  items: ComparacionPeriodos['productosDestacados'];
+  cambioRef: number; // para calcular participación relativa honesta
+}) {
+  const [expandido, setExpandido] = useState(false);
+
+  const impulsores = items.filter((i) => i.diferencia > 0).sort((a, b) => b.diferencia - a.diferencia);
+  const frenos     = items.filter((i) => i.diferencia < 0).sort((a, b) => a.diferencia - b.diferencia);
+
+  const LIMITE = 5;
+
+  function listaItems(grupo: typeof items, esPositivo: boolean) {
+    const visibles = expandido ? grupo : grupo.slice(0, LIMITE);
+    return visibles.map((item) => (
+      <div key={item.nombre} className="flex items-center justify-between py-1.5 text-xs">
+        <span className="text-text-secondary">{item.nombre}</span>
+        <span className={`tabular-nums font-medium ${esPositivo ? 'text-positive' : 'text-negative'}`}>
+          {esPositivo ? '+' : ''}{formatARS(item.diferencia)}
+        </span>
+      </div>
+    ));
+  }
+
+  if (items.length === 0) {
+    return (
+      <div>
+        <div className="mb-2 text-xs font-semibold text-text-secondary">{titulo}</div>
+        <div className="text-xs text-text-muted">Sin cambios relevantes en este período.</div>
+      </div>
+    );
+  }
+
+  const totalImpulsores = impulsores.reduce((s, i) => s + i.diferencia, 0);
+  const totalFrenos     = frenos.reduce((s, i) => s + i.diferencia, 0);
+  const hayMas = (impulsores.length > LIMITE || frenos.length > LIMITE) && !expandido;
+
+  return (
+    <div>
+      <div className="mb-3 text-xs font-semibold text-text-secondary">{titulo}</div>
+
+      {impulsores.length > 0 && (
+        <div className="mb-3">
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs font-medium text-positive">↑ Impulsaron</span>
+            <span className="text-xs tabular-nums text-positive">+{formatARS(totalImpulsores)}</span>
+          </div>
+          <div className="divide-y divide-border/30">
+            {listaItems(impulsores, true)}
+          </div>
+        </div>
+      )}
+
+      {frenos.length > 0 && (
+        <div>
+          <div className="mb-1 flex items-center justify-between">
+            <span className="text-xs font-medium text-negative">↓ Frenaron</span>
+            <span className="text-xs tabular-nums text-negative">{formatARS(totalFrenos)}</span>
+          </div>
+          <div className="divide-y divide-border/30">
+            {listaItems(frenos, false)}
+          </div>
+        </div>
+      )}
+
+      {hayMas && (
+        <button
+          onClick={() => setExpandido(true)}
+          className="mt-2 text-xs text-text-muted underline hover:text-text-secondary"
+        >
+          Ver todos ({items.length} en total)
+        </button>
+      )}
+      {expandido && items.length > LIMITE && (
+        <button
+          onClick={() => setExpandido(false)}
+          className="mt-2 text-xs text-text-muted underline hover:text-text-secondary"
+        >
+          Ver menos
+        </button>
+      )}
+    </div>
+  );
+}
+
+function QueCambio({ comparacion }: { comparacion: ComparacionPeriodos }) {
+  const { subio, frases } = generarResumenEjecutivo(comparacion);
+
+  // Ordenar contribuciones por impacto absoluto descendente
+  const contribucionesOrdenadas = [...comparacion.contribuciones].sort(
+    (a, b) => Math.abs(b.impactoEnNeto) - Math.abs(a.impactoEnNeto)
+  );
+
+  // Variación porcentual del beneficio neto (usando los valores explícitos del backend)
+  const pctVariacion =
+    comparacion.beneficioNetoA !== 0 && Math.abs(comparacion.beneficioNetoA) > 1000
+      ? (comparacion.deltaBeneficioNeto / Math.abs(comparacion.beneficioNetoA)) * 100
+      : null;
+
+  const cambioTotalVentas = comparacion.contribuciones.find(c => c.componente === 'ventas');
+  const cambioRefProductos = cambioTotalVentas ? Math.abs(cambioTotalVentas.valorB - cambioTotalVentas.valorA) : 1;
+  const cambioRefGastos    = Math.abs(comparacion.deltaBeneficioNeto) || 1;
+
+  return (
+    <div className="rounded-lg border border-border bg-surface p-5">
+
+      {/* Header */}
+      <div className="mb-1 flex items-center justify-between">
+        <h2 className="text-sm font-semibold text-text-primary">¿Qué cambió?</h2>
+        <span className="rounded-full bg-positive-bg px-2.5 py-1 text-xs font-medium text-positive">
+          Snapshot congelado
+        </span>
+      </div>
+      <p className="text-xs text-text-muted">
+        {comparacion.periodoA.label} vs. {comparacion.periodoB.label}
+      </p>
+
+      {/* Resumen ejecutivo */}
+      <div className={`mt-4 rounded-md border p-4 ${
+        subio ? 'border-positive/30 bg-positive-bg' : 'border-negative/30 bg-negative-bg'
+      }`}>
+        <div className="space-y-1.5">
+          {frases.map((f, i) => (
+            <p key={i} className={`text-sm ${i === 0 ? 'font-medium text-text-primary' : 'text-text-secondary'}`}>
+              {f}
+            </p>
+          ))}
+        </div>
+      </div>
+
+      {/* Resultado neto — valores absolutos y porcentual */}
+      <div className="mt-4 flex items-center justify-between rounded-md bg-surface-alt px-4 py-3">
+        <div>
+          <div className="text-xs text-text-muted">Beneficio neto</div>
+          <div className="mt-0.5 flex items-baseline gap-2">
+            <span className="tabular-nums text-sm text-text-secondary">
+              {formatARS(comparacion.beneficioNetoA)}
+            </span>
+            <span className="text-text-muted">→</span>
+            <span className={`tabular-nums text-sm font-semibold ${
+              comparacion.beneficioNetoB >= 0 ? 'text-text-primary' : 'text-negative'
+            }`}>
+              {formatARS(comparacion.beneficioNetoB)}
+            </span>
+          </div>
+        </div>
+        <div className="text-right">
+          <div className={`text-lg font-bold tabular-nums ${
+            comparacion.deltaBeneficioNeto >= 0 ? 'text-positive' : 'text-negative'
+          }`}>
+            {comparacion.deltaBeneficioNeto >= 0 ? '+' : ''}{formatARS(comparacion.deltaBeneficioNeto)}
+          </div>
+          {pctVariacion !== null && (
+            <div className={`text-xs tabular-nums font-medium ${
+              pctVariacion >= 0 ? 'text-positive' : 'text-negative'
+            }`}>
+              {pctVariacion >= 0 ? '+' : ''}{pctVariacion.toFixed(1)}% vs semana anterior
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Contribuciones ordenadas por impacto absoluto */}
+      <div className="mt-1 divide-y divide-border/50">
+        {contribucionesOrdenadas.map((c) => (
+          <FilaContribucion
+            key={c.componente}
+            label={c.label}
+            valorA={c.valorA}
+            valorB={c.valorB}
+            impacto={c.impactoEnNeto}
+          />
+        ))}
+      </div>
+
+      {/* Detalle por producto y gasto — separado en impulsores y frenos */}
+      {comparacion.tieneDetalle ? (
+        <div className="mt-5 grid grid-cols-1 gap-6 border-t border-border pt-5 sm:grid-cols-2">
+          <SeccionDestacados
+            titulo="Por producto"
+            items={comparacion.productosDestacados}
+            cambioRef={cambioRefProductos}
+          />
+          <SeccionDestacados
+            titulo="Por categoría de gasto"
+            items={comparacion.gastosDestacados}
+            cambioRef={cambioRefGastos}
+          />
+        </div>
+      ) : (
+        <div className="mt-4 rounded-md border border-border bg-surface-alt px-3 py-2 text-xs text-text-muted">
+          Detalle por producto y por categoría de gasto no disponible para uno o ambos períodos
+          (se congela solo a partir de cierres realizados después de esta actualización).
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Gráfico de área con bandas de salud para Margen Neto ───────────────
+
+function GraficoMargenBandas({
+  datos,
+  bandas,
+  metricas,
+}: {
+  datos: PeriodoCerrado[];
+  bandas: BandasMargen;
+  metricas: { key: keyof PeriodoCerrado; label: string; color: string; activa: boolean }[];
+}) {
+  const [hoverId, setHoverId] = useState<string | null>(null);
+
+  const W = 800;
+  const H = 240;
+  const padL = 40;
+  const padR = 12;
+  const padT = 12;
+  const padB = 32;
+
+  const w = W - padL - padR;
+  const h = H - padT - padB;
+
+  // Eje Y dinámico — se ajusta al rango real de los datos para que los
+  // márgenes negativos sean siempre visibles, con padding de 5pp hacia abajo.
+  const valoresMargen = datos.map(p => p.margenNeto);
+  const maxY = 100; // siempre mostramos hasta 100%
+  const minYRaw = Math.min(0, ...valoresMargen);
+  const minY = Math.floor((minYRaw - 5) / 10) * 10; // pad 5pp, redondeado a décena
+  const rango = maxY - minY;
+
+  const hayNegativos = minY < 0;
+
+  function yPos(valor: number) {
+    return padT + h - ((valor - minY) / rango) * h;
+  }
+
+  function xPos(i: number) {
+    return padL + (datos.length > 1 ? (i / (datos.length - 1)) * w : w / 2);
+  }
+
+  function polyline(key: keyof PeriodoCerrado) {
+    return datos
+      .map((p, i) => `${xPos(i).toFixed(1)},${yPos(Number(p[key]) || 0).toFixed(1)}`)
+      .join(' ');
+  }
+
+  function zonaMargen(margenNeto: number) {
+    if (margenNeto < 0)                       return { label: 'Pérdida',   color: '#8B0000' };
+    if (margenNeto >= bandas.excelenteMinimo) return { label: 'Excelente', color: '#1D9E75' };
+    if (margenNeto >= bandas.objetivoMinimo)  return { label: 'Objetivo',  color: '#1D9E75' };
+    if (margenNeto >= bandas.alertaMinimo)    return { label: 'Alerta',    color: '#EAB308' };
+    return                                           { label: 'Problema',  color: '#E24B4A' };
+  }
+
+  // Al mover el mouse sobre el SVG, encontramos el punto más cercano en X
+  function handleMouseMove(e: React.MouseEvent<SVGSVGElement>) {
+    const rect = e.currentTarget.getBoundingClientRect();
+    const mouseX = ((e.clientX - rect.left) / rect.width) * W;
+    let closestIdx = 0;
+    let closestDist = Infinity;
+    datos.forEach((_, i) => {
+      const dist = Math.abs(xPos(i) - mouseX);
+      if (dist < closestDist) { closestDist = dist; closestIdx = i; }
+    });
+    setHoverId(datos[closestIdx]?.id ?? null);
+  }
+
+  // Etiquetas del eje Y cada 10pp, cubriendo el rango dinámico
+  const etiquetasY: number[] = [];
+  for (let v = minY; v <= maxY; v += 10) etiquetasY.push(v);
+
+  const BANDA_PERDIDA   = 'rgba(139,0,0,0.08)';     // rojo oscuro muy suave para pérdidas
+  const BANDA_PROBLEMA  = 'rgba(226,75,74,0.10)';
+  const BANDA_ALERTA    = 'rgba(234,179,8,0.10)';
+  const BANDA_OBJETIVO  = 'rgba(29,158,117,0.08)';
+  const BANDA_EXCELENTE = 'rgba(29,158,117,0.18)';
+
+  const hoverPeriodo = hoverId ? datos.find(p => p.id === hoverId) : null;
+  const hoverIdx     = hoverId ? datos.findIndex(p => p.id === hoverId) : -1;
+
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="mb-3 flex flex-wrap items-center gap-4 text-xs text-text-muted">
+        {hayNegativos && (
+          <span className="flex items-center gap-1.5">
+            <span className="inline-block h-2 w-4 rounded-sm" style={{ background: BANDA_PERDIDA }} />
+            Pérdida (&lt;0%)
+          </span>
+        )}
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-4 rounded-sm" style={{ background: BANDA_PROBLEMA }} />
+          Problema (&lt;{bandas.alertaMinimo}%)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-4 rounded-sm" style={{ background: BANDA_ALERTA }} />
+          Alerta ({bandas.alertaMinimo}–{bandas.objetivoMinimo}%)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-4 rounded-sm" style={{ background: BANDA_OBJETIVO }} />
+          Objetivo ({bandas.objetivoMinimo}–{bandas.excelenteMinimo}%)
+        </span>
+        <span className="flex items-center gap-1.5">
+          <span className="inline-block h-2 w-4 rounded-sm" style={{ background: BANDA_EXCELENTE }} />
+          Excelente (&gt;{bandas.excelenteMinimo}%)
+        </span>
+      </div>
+
+      {/* Tooltip — visible cuando hay un punto seleccionado */}
+      {hoverPeriodo && (() => {
+        const zona = zonaMargen(hoverPeriodo.margenNeto);
+        return (
+          <div className="mb-3 flex flex-wrap items-center gap-4 rounded-md bg-surface-alt px-3 py-2 text-xs">
+            <span className="font-medium text-text-primary">{hoverPeriodo.label}</span>
+            <span className="tabular-nums text-text-secondary">
+              Ventas: <span className="text-text-primary">{formatARS(hoverPeriodo.ventas)}</span>
+            </span>
+            <span className="tabular-nums text-text-secondary">
+              Beneficio neto: <span className="text-text-primary">{formatARS(hoverPeriodo.beneficioNeto)}</span>
+            </span>
+            <span className="tabular-nums text-text-secondary">
+              Margen neto: <span className="font-medium text-text-primary">{hoverPeriodo.margenNeto.toFixed(1)}%</span>
+            </span>
+            <span
+              className="rounded-full px-2 py-0.5 text-xs font-medium"
+              style={{ background: zona.color + '22', color: zona.color }}
+            >
+              {zona.label}
+            </span>
+          </div>
+        );
+      })()}
+
+      <svg
+        viewBox={`0 0 ${W} ${H}`}
+        className="w-full cursor-crosshair"
+        style={{ height: H }}
+        onMouseMove={handleMouseMove}
+        onMouseLeave={() => setHoverId(null)}
+      >
+        {/* Bandas de salud */}
+        {/* Pérdida (solo si hay valores negativos) */}
+        {hayNegativos && (
+          <rect x={padL} y={yPos(0)} width={w}
+            height={yPos(minY) - yPos(0)} fill={BANDA_PERDIDA} />
+        )}
+        <rect x={padL} y={yPos(Math.min(bandas.alertaMinimo, maxY))} width={w}
+          height={yPos(Math.max(0, minY)) - yPos(Math.min(bandas.alertaMinimo, maxY))} fill={BANDA_PROBLEMA} />
+        <rect x={padL} y={yPos(Math.min(bandas.objetivoMinimo, maxY))} width={w}
+          height={yPos(bandas.alertaMinimo) - yPos(Math.min(bandas.objetivoMinimo, maxY))} fill={BANDA_ALERTA} />
+        <rect x={padL} y={yPos(Math.min(bandas.excelenteMinimo, maxY))} width={w}
+          height={yPos(bandas.objetivoMinimo) - yPos(Math.min(bandas.excelenteMinimo, maxY))} fill={BANDA_OBJETIVO} />
+        <rect x={padL} y={padT} width={w} height={yPos(bandas.excelenteMinimo) - padT} fill={BANDA_EXCELENTE} />
+
+        {/* Línea de cero — referencia visual clave cuando hay negativos */}
+        {hayNegativos && (
+          <line
+            x1={padL} y1={yPos(0)} x2={padL + w} y2={yPos(0)}
+            stroke="currentColor" strokeOpacity={0.35} strokeWidth={1.5}
+            className="text-text-muted"
+          />
+        )}
+
+        {/* Línea vertical del hover */}
+        {hoverIdx >= 0 && (
+          <line
+            x1={xPos(hoverIdx)} y1={padT}
+            x2={xPos(hoverIdx)} y2={padT + h}
+            stroke="currentColor" strokeOpacity={0.2} strokeWidth={1}
+            className="text-text-muted"
+          />
+        )}
+
+        {/* Líneas de umbral */}
+        {[bandas.alertaMinimo, bandas.objetivoMinimo, bandas.excelenteMinimo].map((v) => (
+          <line key={v} x1={padL} y1={yPos(v)} x2={padL + w} y2={yPos(v)}
+            stroke="currentColor" strokeOpacity={0.15} strokeWidth={1} strokeDasharray="4 3"
+            className="text-text-muted" />
+        ))}
+
+        {/* Eje Y */}
+        {etiquetasY.map((v) => (
+          <g key={v}>
+            <line x1={padL - 4} y1={yPos(v)} x2={padL} y2={yPos(v)}
+              stroke="currentColor" strokeOpacity={0.2} strokeWidth={1} className="text-text-muted" />
+            <text x={padL - 6} y={yPos(v)} textAnchor="end" dominantBaseline="middle"
+              fontSize={9} fill="currentColor" fillOpacity={0.4} className="text-text-muted">
+              {v}%
+            </text>
+          </g>
+        ))}
+
+        {/* Líneas de métricas */}
+        {metricas.filter(m => m.activa).map((m) => (
+          <polyline key={String(m.key)} points={polyline(m.key)}
+            fill="none" stroke={m.color} strokeWidth={2}
+            strokeLinecap="round" strokeLinejoin="round" />
+        ))}
+
+        {/* Puntos — el hovered es más grande */}
+        {datos.map((p, i) => {
+          const esHover = p.id === hoverId;
+          return (
+            <circle
+              key={p.id}
+              cx={xPos(i)} cy={yPos(p.margenNeto)}
+              r={esHover ? 5 : 3}
+              fill={metricas[0].color}
+              stroke={esHover ? 'white' : 'none'}
+              strokeWidth={esHover ? 1.5 : 0}
+            />
+          );
+        })}
+
+        {/* Eje X */}
+        {datos.map((p, i) => {
+          const mostrar = datos.length <= 8 || i % Math.ceil(datos.length / 8) === 0 || i === datos.length - 1;
+          if (!mostrar) return null;
+          const partes = p.label.split('—');
+          const labelCorto = partes[0]?.trim().replace(/^Vie /, '') || p.label;
+          return (
+            <text key={p.id} x={xPos(i)} y={H - padB + 14} textAnchor="middle" fontSize={9}
+              fill="currentColor" fillOpacity={p.id === hoverId ? 0.8 : 0.4}
+              fontWeight={p.id === hoverId ? 'bold' : 'normal'}
+              className="text-text-muted">
+              {labelCorto}
+            </text>
+          );
+        })}
+      </svg>
+    </div>
+  );
+}
+
+// ─── Salud de Clientes — subcomponentes y tab ────────────────────────────
+
+const UMBRAL_MUESTRA_CONFIABLE = 30;
+
+// Convierte +54XXXXXXXXXX a formato wa.me (sin + ni espacios)
+function waLink(celular: string): string {
+  const limpio = celular.replace(/[^0-9]/g, '');
+  return `https://wa.me/${limpio}`;
+}
+
+// Formatea fecha ISO a string legible en es-AR
+function formatFecha(iso: string): string {
+  if (!iso) return '—';
+  return new Date(iso).toLocaleDateString('es-AR', { day: 'numeric', month: 'short', year: 'numeric' });
+}
+
+// Lógica de semáforo de cartera
+// Inputs: retencionCartera (%) y diff de tendencia (pp)
+// Sin datos suficientes → estado especial
+type EstadoCartera = 'excelente' | 'aceptable' | 'atencion' | 'critico' | 'sin_datos';
+
+function calcularEstadoCartera(
+  retencionCartera: number,
+  diffTendencia: number,
+  sinDatosTendencia: boolean
+): EstadoCartera {
+  if (retencionCartera === 0) return 'sin_datos';
+  if (retencionCartera >= 60 && (sinDatosTendencia || diffTendencia >= -2)) return 'excelente';
+  if (retencionCartera >= 40 && (sinDatosTendencia || diffTendencia >= -5)) return 'aceptable';
+  if (retencionCartera >= 40 && diffTendencia < -5) return 'atencion';
+  if (retencionCartera < 40 && (sinDatosTendencia || diffTendencia >= -2)) return 'atencion';
+  return 'critico';
+}
+
+const CONFIG_SEMAFORO: Record<EstadoCartera, {
+  icono: string;
+  label: string;
+  claseIcono: string;
+  claseFondo: string;
+  claseBorde: string;
+}> = {
+  excelente:  { icono: '●', label: 'Excelente',  claseIcono: 'text-positive',    claseFondo: 'bg-positive-bg',  claseBorde: 'border-positive/30'  },
+  aceptable:  { icono: '●', label: 'Aceptable',  claseIcono: 'text-positive',    claseFondo: 'bg-surface',      claseBorde: 'border-border'        },
+  atencion:   { icono: '●', label: 'Atención',   claseIcono: 'text-warning',     claseFondo: 'bg-warning-bg',   claseBorde: 'border-warning/30'    },
+  critico:    { icono: '●', label: 'Crítico',    claseIcono: 'text-negative',    claseFondo: 'bg-negative-bg',  claseBorde: 'border-negative/30'   },
+  sin_datos:  { icono: '○', label: 'Sin datos',  claseIcono: 'text-text-muted',  claseFondo: 'bg-surface-alt',  claseBorde: 'border-border'        },
+};
+
+function etiquetaTendencia(diff: number): { label: string; color: string } {
+  if (diff <= -5)  return { label: 'Deterioro significativo', color: 'text-negative' };
+  if (diff < -2)   return { label: 'Leve deterioro',          color: 'text-warning'  };
+  if (diff <= 2)   return { label: 'Estable',                 color: 'text-text-muted' };
+  return               { label: 'Mejorando',                  color: 'text-positive'  };
+}
+
+function CardCategoria({
+  label, valor, descripcion, color,
+}: {
+  label: string; valor: number; descripcion: string; color: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="text-xs text-text-muted">{label}</div>
+      <div className={`mt-1 text-2xl font-semibold tabular-nums ${color}`}>{valor}</div>
+      <div className="mt-1 text-xs text-text-secondary">{descripcion}</div>
+    </div>
+  );
+}
+
+function MetricaCliente({
+  label, valor, subtexto,
+}: {
+  label: string; valor: string; subtexto?: string;
+}) {
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="text-xs text-text-muted">{label}</div>
+      <div className="mt-1 text-xl font-semibold tabular-nums text-text-primary">{valor}</div>
+      {subtexto && <div className="mt-1 text-xs text-text-secondary">{subtexto}</div>}
+    </div>
+  );
+}
+
+// Fila de tendencia — layout visual de tres columnas: anterior → actual → variación+etiqueta
+function FilaTendencia({
+  label, actual, anterior, formato, muestraActual, muestraAnterior,
+}: {
+  label: string;
+  actual: number;
+  anterior: number;
+  formato: (n: number) => string;
+  muestraActual: number;
+  muestraAnterior: number;
+}) {
+  const diff = actual - anterior;
+  const sinCambio = Math.abs(diff) < 0.05;
+  const muestraInsuficiente =
+    muestraActual < UMBRAL_MUESTRA_CONFIABLE || muestraAnterior < UMBRAL_MUESTRA_CONFIABLE;
+  const { label: etiqueta, color: etiquetaColor } = etiquetaTendencia(diff);
+  const colorDiff = sinCambio ? 'text-text-muted' : diff > 0 ? 'text-positive' : 'text-negative';
+
+  return (
+    <div className="py-4 first:pt-0 last:pb-0">
+      <div className="mb-2 text-xs font-medium text-text-secondary">{label}</div>
+      <div className="flex items-center gap-3">
+        {/* Anterior */}
+        <div className="text-center">
+          <div className="text-xs text-text-muted">Anterior</div>
+          <div className="mt-0.5 text-xl font-semibold tabular-nums text-text-secondary">
+            {formato(anterior)}
+          </div>
+        </div>
+        {/* Flecha */}
+        <div className={`text-2xl ${colorDiff}`}>→</div>
+        {/* Actual */}
+        <div className="text-center">
+          <div className="text-xs text-text-muted">Actual</div>
+          <div className="mt-0.5 text-xl font-semibold tabular-nums text-text-primary">
+            {formato(actual)}
+          </div>
+        </div>
+        {/* Separador */}
+        <div className="mx-1 h-8 w-px bg-border" />
+        {/* Variación + etiqueta */}
+        <div>
+          <div className={`text-xl font-bold tabular-nums ${colorDiff}`}>
+            {sinCambio ? '—' : diff > 0 ? '+' : ''}{diff.toFixed(1)} pp
+          </div>
+          <div className={`mt-0.5 text-xs font-medium ${
+            muestraInsuficiente ? 'text-warning' : sinCambio ? 'text-text-muted' : etiquetaColor
+          }`}>
+            {muestraInsuficiente ? '⚠ muestra pequeña' : sinCambio ? 'Sin cambio' : etiqueta}
+          </div>
+        </div>
+      </div>
+      {muestraInsuficiente && (
+        <div className="mt-1.5 text-xs text-text-muted">
+          Anterior: {muestraAnterior} clientes · Actual: {muestraActual} clientes
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Modal de clientes de alto valor en riesgo
+function ModalAltoValor({
+  clientes,
+  ventanaDias,
+  onClose,
+}: {
+  clientes: ClienteValioso[];
+  ventanaDias: number;
+  onClose: () => void;
+}) {
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/20" onClick={onClose} />
+      <div className="relative w-full max-w-2xl rounded-lg border border-border bg-surface p-5 shadow-xl">
+        <div className="mb-4 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-text-primary">
+              Clientes de alto valor en riesgo
+            </h3>
+            <p className="mt-0.5 text-xs text-text-muted">
+              3+ pedidos · último hace más de {ventanaDias} días · ordenados por urgencia
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="rounded-md p-1.5 text-text-muted hover:bg-surface-alt hover:text-text-primary"
+          >
+            ✕
+          </button>
+        </div>
+
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-text-muted">
+                <th className="pb-2 font-medium">Nombre</th>
+                <th className="pb-2 text-right font-medium">Pedidos</th>
+                <th className="pb-2 text-right font-medium">Facturación acumulada</th>
+                <th className="pb-2 text-right font-medium">Sin comprar</th>
+                <th className="pb-2 text-center font-medium">Contacto</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {clientes.map((c, i) => (
+                <tr key={i}>
+                  <td className="py-2.5 text-text-primary">{c.nombre || '—'}</td>
+                  <td className="py-2.5 text-right tabular-nums text-text-secondary">
+                    {c.totalPedidos}
+                  </td>
+                  <td className="py-2.5 text-right tabular-nums text-text-primary">
+                    {formatARS(c.ventasTotales)}
+                  </td>
+                  <td className="py-2.5 text-right tabular-nums">
+                    <span className={`font-medium ${
+                      (c.diasSinComprar ?? 0) > ventanaDias * 2 ? 'text-negative'
+                      : 'text-warning'
+                    }`}>
+                      {c.diasSinComprar ?? '—'} días
+                    </span>
+                  </td>
+                  <td className="py-2.5 text-center">
+                    {c.celular ? (
+                      <a
+                        href={waLink(c.celular)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+                      >
+                        WhatsApp
+                      </a>
+                    ) : (
+                      <span className="text-xs text-text-muted">Sin teléfono</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function TabSaludClientes({
+  salud,
+  loading,
+}: {
+  salud: SaludClientes | null;
+  loading: boolean;
+}) {
+  const [modalAltoValorAbierto, setModalAltoValorAbierto] = useState(false);
+
+  if (loading) {
+    return <div className="py-12 text-center text-sm text-text-muted">Cargando salud de clientes…</div>;
+  }
+  if (!salud) {
+    return (
+      <div className="rounded-lg border border-border bg-surface p-8 text-center">
+        <p className="text-sm text-text-muted">No se pudo cargar la información de clientes.</p>
+      </div>
+    );
+  }
+
+  const conVeredicto = salud.activo + salud.enRiesgo + salud.nuevoPerdido;
+  const historialCorto = salud.tendAnterior.nClientes < UMBRAL_MUESTRA_CONFIABLE;
+  const diffTendencia = salud.tendActual.tasaRetencion - salud.tendAnterior.tasaRetencion;
+  const sinDatosTendencia = salud.tendAnterior.nClientes === 0;
+  const estadoCartera = calcularEstadoCartera(salud.retencionCartera, diffTendencia, sinDatosTendencia);
+  const cfg = CONFIG_SEMAFORO[estadoCartera];
+
+  // Frase del semáforo: basada 100% en los números, sin adjetivos inventados
+  function fraseSemaforo(): string {
+    const partes: string[] = [];
+    partes.push(`Retención de cartera ${salud.retencionCartera.toFixed(1)}%`);
+    if (!sinDatosTendencia) {
+      const { label } = etiquetaTendencia(diffTendencia);
+      partes.push(`${label.toLowerCase()} en tendencia reciente (${diffTendencia > 0 ? '+' : ''}${diffTendencia.toFixed(1)} pp)`);
+    } else {
+      partes.push('tendencia sin datos suficientes');
+    }
+    if (salud.altoValorEnRiesgo > 0) {
+      partes.push(`${salud.altoValorEnRiesgo} cliente${salud.altoValorEnRiesgo !== 1 ? 's' : ''} de alto valor sin volver`);
+    }
+    return partes.join(', ') + '.';
+  }
+
+  return (
+    <div className="space-y-5">
+
+      {/* ── Semáforo de cartera ─────────────────────────────────────────── */}
+      <div className={`rounded-lg border p-5 ${cfg.claseFondo} ${cfg.claseBorde}`}>
+        <div className="flex items-start gap-3">
+          <span className={`mt-0.5 flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full text-sm ${cfg.claseIcono} bg-white/60`}>
+            {cfg.icono}
+          </span>
+          <div className="flex-1">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <span className={`text-sm font-bold ${cfg.claseIcono}`}>{cfg.label}</span>
+              <span className="text-sm text-text-primary">{fraseSemaforo()}</span>
+            </div>
+            {salud.altoValorEnRiesgo > 0 && (
+              <button
+                onClick={() => setModalAltoValorAbierto(true)}
+                className="mt-2 text-xs font-medium text-text-secondary underline underline-offset-2 hover:text-text-primary"
+              >
+                Ver {salud.altoValorEnRiesgo} cliente{salud.altoValorEnRiesgo !== 1 ? 's' : ''} →
+              </button>
+            )}
+          </div>
+          <div className="flex-shrink-0 text-right">
+            <div className={`text-2xl font-bold tabular-nums ${cfg.claseIcono}`}>
+              {salud.retencionCartera.toFixed(1)}%
+            </div>
+            <div className="mt-0.5 text-xs text-text-muted">retención de cartera</div>
+          </div>
+        </div>
+      </div>
+
+      {/* Aviso de historial corto */}
+      {historialCorto && (
+        <div className="rounded-md border border-border bg-warning-bg px-4 py-3 text-xs text-warning">
+          <span className="font-medium">Historial todavía corto.</span>{' '}
+          La ventana anterior tiene solo {salud.tendAnterior.nClientes} cliente
+          {salud.tendAnterior.nClientes !== 1 ? 's' : ''} — las tendencias son orientativas.
+        </div>
+      )}
+
+      {/* ── Categorías de clientes ─────────────────────────────────────── */}
+      <div>
+        <div className="mb-2 flex flex-wrap items-baseline gap-x-3 gap-y-1">
+          <h3 className="text-sm font-semibold text-text-primary">Estado de la base de clientes</h3>
+          <span className="text-xs text-text-muted">
+            {salud.totalUnicos} clientes únicos · ventana de recompra esperada:{' '}
+            <span className="font-medium">{salud.ventanaDias} días</span>
+            {salud.medianaDiasEntreCompras > 0 && (
+              <> (mediana real: {salud.medianaDiasEntreCompras} días · promedio: {salud.promedioDiasEntreCompras} días)</>
+            )}
+          </span>
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <CardCategoria label="Activos" valor={salud.activo}
+            descripcion={`2+ pedidos, último hace <${salud.ventanaDias} días`} color="text-positive" />
+          <CardCategoria label="En riesgo" valor={salud.enRiesgo}
+            descripcion={`2+ pedidos, último hace >${salud.ventanaDias} días`} color="text-warning" />
+          <CardCategoria label="Nuevo perdido" valor={salud.nuevoPerdido}
+            descripcion={`1 pedido, hace >${salud.ventanaDias} días`} color="text-negative" />
+          <CardCategoria label="Reciente sin veredicto" valor={salud.recienteSinVeredicto}
+            descripcion={`1er pedido hace <${salud.ventanaDias} días`} color="text-text-muted" />
+        </div>
+        {salud.recienteSinVeredicto > 0 && (
+          <p className="mt-2 text-xs text-text-muted">
+            Los {salud.recienteSinVeredicto} clientes recientes no participan de las métricas de retención — todavía no tuvieron tiempo de volver.
+          </p>
+        )}
+      </div>
+
+      {/* ── Clientes de alto valor en riesgo ──────────────────────────── */}
+      {salud.altoValorEnRiesgo > 0 ? (
+        <div className="rounded-lg border border-negative bg-negative-bg p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 text-lg">⚠</span>
+              <div>
+                <div className="text-sm font-semibold text-negative">
+                  {salud.altoValorEnRiesgo} cliente{salud.altoValorEnRiesgo !== 1 ? 's' : ''} de alto valor en riesgo
+                </div>
+                <div className="mt-1 text-xs text-text-secondary">
+                  3+ pedidos · hace más de {salud.ventanaDias} días sin volver ·{' '}
+                  facturación histórica acumulada: <span className="font-medium">{formatARS(salud.altoValorVentasHistoricas)}</span>
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setModalAltoValorAbierto(true)}
+              className="flex-shrink-0 rounded-md border border-negative/40 bg-white/40 px-3 py-1.5 text-xs font-medium text-negative hover:bg-white/60"
+            >
+              Ver lista →
+            </button>
+          </div>
+        </div>
+      ) : salud.enRiesgo > 0 ? (
+        <div className="rounded-md border border-border bg-positive-bg px-4 py-2.5 text-xs text-positive">
+          ✓ Ningún cliente de 3+ pedidos está en riesgo actualmente.
+        </div>
+      ) : null}
+
+      {/* ── Historial de clientes en riesgo ───────────────────────────── */}
+      {salud.enRiesgo > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-5">
+          <h3 className="mb-3 text-sm font-semibold text-text-primary">
+            Historial de clientes en riesgo
+          </h3>
+          <div className="grid grid-cols-3 gap-4">
+            <div>
+              <div className="text-xs text-text-muted">Facturación acumulada</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums text-text-primary">
+                {formatARS(salud.enRiesgoVentasHistoricas)}
+              </div>
+              <div className="mt-0.5 text-xs text-text-muted">del total que gastaron</div>
+            </div>
+            <div>
+              <div className="text-xs text-text-muted">Ticket promedio histórico</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums text-text-primary">
+                {formatARS(salud.enRiesgoTicketPromedio)}
+              </div>
+              <div className="mt-0.5 text-xs text-text-muted">por pedido en toda su historia</div>
+            </div>
+            <div>
+              <div className="text-xs text-text-muted">Pedidos acumulados</div>
+              <div className="mt-1 text-lg font-semibold tabular-nums text-text-primary">
+                {salud.enRiesgoPedidosTotales}
+              </div>
+              <div className="mt-0.5 text-xs text-text-muted">en total entre los {salud.enRiesgo} clientes</div>
+            </div>
+          </div>
+          <p className="mt-3 text-xs text-text-muted">
+            Datos históricos acumulados de los {salud.enRiesgo} clientes en riesgo — no son una proyección de pérdida futura.
+          </p>
+        </div>
+      )}
+
+      {/* ── Métricas de retención ──────────────────────────────────────── */}
+      <div>
+        <h3 className="mb-2 text-sm font-semibold text-text-primary">Métricas de retención</h3>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <MetricaCliente label="Retención de cartera" valor={`${salud.retencionCartera.toFixed(1)}%`}
+            subtexto="activos / (activos + en riesgo)" />
+          <MetricaCliente label="% facturación de repetidores" valor={`${salud.pctFacturacionRepetidores.toFixed(1)}%`}
+            subtexto={formatARS(salud.ventasRepetidores)} />
+          <MetricaCliente label="% clientes repetidores" valor={`${salud.pctClientesRepetidores.toFixed(1)}%`}
+            subtexto={`sobre ${conVeredicto} con veredicto`} />
+          <MetricaCliente label="Tasa de retención" valor={`${salud.tasaRetencion.toFixed(1)}%`}
+            subtexto="volvieron al menos 1 vez" />
+        </div>
+      </div>
+
+      {/* ── Tendencia ─────────────────────────────────────────────────── */}
+      <div className="rounded-lg border border-border bg-surface p-5">
+        <div className="mb-1 flex flex-wrap items-baseline justify-between gap-2">
+          <h3 className="text-sm font-semibold text-text-primary">Tendencia — ventanas de 28 días</h3>
+          <span className="text-xs text-text-muted">Universo: clientes con primer pedido en cada ventana</span>
+        </div>
+        <p className="mb-5 text-xs text-text-muted">
+          ¿Qué fracción de los clientes nuevos de cada período volvió a comprar?
+        </p>
+        <div className="divide-y divide-border/50">
+          <FilaTendencia
+            label="Tasa de retención de primera compra"
+            actual={salud.tendActual.tasaRetencion}
+            anterior={salud.tendAnterior.tasaRetencion}
+            formato={(n) => `${n.toFixed(1)}%`}
+            muestraActual={salud.tendActual.nClientes}
+            muestraAnterior={salud.tendAnterior.nClientes}
+          />
+          <FilaTendencia
+            label="% facturación de repetidores"
+            actual={salud.tendActual.pctFacturacion}
+            anterior={salud.tendAnterior.pctFacturacion}
+            formato={(n) => `${n.toFixed(1)}%`}
+            muestraActual={salud.tendActual.nClientes}
+            muestraAnterior={salud.tendAnterior.nClientes}
+          />
+        </div>
+        {/* Tamaños de muestra como contexto secundario */}
+        <div className="mt-5 grid grid-cols-2 gap-3 border-t border-border pt-4">
+          <div className="rounded-md bg-surface-alt p-3 text-xs">
+            <div className="font-medium text-text-secondary">Ventana anterior</div>
+            <div className="mt-1 text-text-muted">
+              {new Date(salud.tendAnterior.desde).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+              {' – '}
+              {new Date(salud.tendAnterior.hasta).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+            </div>
+            <div className="mt-2 tabular-nums text-text-primary">
+              <span className="text-lg font-semibold">{salud.tendAnterior.nClientes}</span>
+              <span className="ml-1 text-text-muted">clientes</span>
+              {' · '}
+              <span>{salud.tendAnterior.nRetuvieron} retuvieron</span>
+            </div>
+            {salud.tendAnterior.nClientes < UMBRAL_MUESTRA_CONFIABLE && (
+              <div className="mt-0.5 text-warning">· muestra pequeña</div>
+            )}
+          </div>
+          <div className="rounded-md bg-surface-alt p-3 text-xs">
+            <div className="font-medium text-text-secondary">Ventana actual</div>
+            <div className="mt-1 text-text-muted">
+              {new Date(salud.tendActual.desde).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+              {' – '}
+              {new Date(salud.tendActual.hasta).toLocaleDateString('es-AR', { day: 'numeric', month: 'short' })}
+            </div>
+            <div className="mt-2 tabular-nums text-text-primary">
+              <span className="text-lg font-semibold">{salud.tendActual.nClientes}</span>
+              <span className="ml-1 text-text-muted">clientes</span>
+              {' · '}
+              <span>{salud.tendActual.nRetuvieron} retuvieron</span>
+            </div>
+            {salud.tendActual.nClientes < UMBRAL_MUESTRA_CONFIABLE && (
+              <div className="mt-0.5 text-warning">· muestra pequeña</div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* ── Clientes más valiosos ──────────────────────────────────────── */}
+      {salud.topRepetidores.length > 0 && (
+        <div className="rounded-lg border border-border bg-surface p-5">
+          <h3 className="mb-3 text-sm font-semibold text-text-primary">Clientes más valiosos</h3>
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="border-b border-border text-left text-xs text-text-muted">
+                <th className="pb-2 font-medium">Nombre</th>
+                <th className="pb-2 text-right font-medium">Pedidos</th>
+                <th className="pb-2 text-right font-medium">Facturación acumulada</th>
+                <th className="pb-2 text-right font-medium">Último pedido</th>
+                <th className="pb-2 text-center font-medium">Contacto</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border/50">
+              {salud.topRepetidores.map((c, i) => (
+                <tr key={i}>
+                  <td className="py-2.5 text-text-primary">{c.nombre || '—'}</td>
+                  <td className="py-2.5 text-right tabular-nums text-text-secondary">{c.totalPedidos}</td>
+                  <td className="py-2.5 text-right tabular-nums text-text-primary">{formatARS(c.ventasTotales)}</td>
+                  <td className="py-2.5 text-right tabular-nums text-text-muted">{formatFecha(c.ultimoPedido)}</td>
+                  <td className="py-2.5 text-center">
+                    {c.celular ? (
+                      <a
+                        href={waLink(c.celular)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+                      >
+                        WhatsApp
+                      </a>
+                    ) : (
+                      <span className="text-xs text-text-muted">—</span>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
+      {/* Modal de alto valor en riesgo */}
+      {modalAltoValorAbierto && salud.altoValorDetalle.length > 0 && (
+        <ModalAltoValor
+          clientes={salud.altoValorDetalle}
+          ventanaDias={salud.ventanaDias}
+          onClose={() => setModalAltoValorAbierto(false)}
+        />
+      )}
+
+    </div>
+  );
+}
+
+
+// ─── Tab Tabla Semanal ──────────────────────────────────────────────────
+
+function exportarCSV(periodos: PeriodoCerrado[]) {
+  // CSV puro — sin dependencias externas, sin imports dinámicos.
+  // Excel, Google Sheets y Numbers lo abren directamente.
+  const encabezado = [
+    'Semana',
+    'Pedidos',
+    'Ventas',
+    'Ben. bruto',
+    'Margen bruto %',
+    'Publicidad %',
+    'ROAS',
+    'Result. delivery',
+    'Ben. neto',
+    'Margen neto %',
+    'Ticket promedio',
+    'Hamb. vendidas',
+  ].join(',');
+
+  const filas = periodos.map((p) =>
+    [
+      `"${p.label}"`,
+      p.pedidos,
+      p.ventas,
+      p.beneficioBruto,
+      p.margenBruto.toFixed(1),
+      p.publicidadPct.toFixed(1),
+      p.roas.toFixed(2),
+      p.resultadoDelivery,
+      p.beneficioNeto,
+      p.margenNeto.toFixed(1),
+      p.ticketPromedio.toFixed(0),
+      p.hamburguesasVendidas,
+    ].join(',')
+  );
+
+  const csv = [encabezado, ...filas].join('\n');
+  const blob = new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `royalty-evolucion-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function colorMargen(margen: number, bandas: BandasMargen | null): string {
+  if (!bandas) return 'text-text-primary';
+  if (margen >= bandas.excelenteMinimo) return 'text-positive';
+  if (margen >= bandas.objetivoMinimo)  return 'text-positive';
+  if (margen >= bandas.alertaMinimo)    return 'text-warning';
+  if (margen >= 0)                      return 'text-warning';
+  return 'text-negative';
+}
+
+function bgMargen(margen: number, bandas: BandasMargen | null): string {
+  if (!bandas) return '';
+  if (margen >= bandas.excelenteMinimo) return 'bg-positive-bg';
+  if (margen >= bandas.objetivoMinimo)  return 'bg-positive-bg';
+  if (margen >= bandas.alertaMinimo)    return 'bg-warning-bg';
+  if (margen >= 0)                      return 'bg-warning-bg';
+  return 'bg-negative-bg';
+}
+
+function TabTablaSemanal({
+  periodos,
+  bandas,
+}: {
+  periodos: PeriodoCerrado[];
+  bandas: BandasMargen | null;
+}) {
+  if (periodos.length === 0) {
+    return (
+      <div className="rounded-lg border border-border bg-surface p-8 text-center">
+        <p className="text-sm text-text-muted">
+          No hay semanas cerradas todavía. Cerrá la primera semana para ver la evolución aquí.
+        </p>
+      </div>
+    );
+  }
+
+  // Promedios para la fila de resumen
+  const n = periodos.length;
+  const avg = (fn: (p: PeriodoCerrado) => number) =>
+    periodos.reduce((s, p) => s + fn(p), 0) / n;
+  const sum = (fn: (p: PeriodoCerrado) => number) =>
+    periodos.reduce((s, p) => s + fn(p), 0);
+
+  // Mostrar más reciente primero en la tabla
+  const ordenadas = [...periodos].reverse();
+
+  return (
+    <div className="space-y-3">
+      {/* Header con botón de exportación */}
+      <div className="flex items-center justify-between">
+        <p className="text-xs text-text-muted">
+          {n} semana{n !== 1 ? 's' : ''} cerrada{n !== 1 ? 's' : ''} · más reciente primero
+        </p>
+        <button
+          onClick={() => exportarCSV(periodos)}
+          className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+        >
+          ↓ Exportar CSV
+        </button>
+      </div>
+
+      {/* Tabla — scroll horizontal en pantallas chicas */}
+      <div className="overflow-x-auto rounded-lg border border-border">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border bg-surface-alt text-left text-xs text-text-muted">
+              <th className="px-3 py-2.5 font-medium">Semana</th>
+              <th className="px-3 py-2.5 text-right font-medium">Pedidos</th>
+              <th className="px-3 py-2.5 text-right font-medium">Ventas</th>
+              <th className="px-3 py-2.5 text-right font-medium">Ben. bruto</th>
+              <th className="px-3 py-2.5 text-right font-medium">Mg. bruto</th>
+              <th className="px-3 py-2.5 text-right font-medium">Publicidad</th>
+              <th className="px-3 py-2.5 text-right font-medium">ROAS</th>
+              <th className="px-3 py-2.5 text-right font-medium">Delivery</th>
+              <th className="px-3 py-2.5 text-right font-medium">Ben. neto</th>
+              <th className="px-3 py-2.5 text-right font-medium">Mg. neto</th>
+              <th className="px-3 py-2.5 text-right font-medium">Ticket prom.</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/50">
+            {ordenadas.map((p) => (
+              <tr key={p.id} className="hover:bg-surface-alt/50">
+                <td className="px-3 py-2 text-xs text-text-secondary">{p.label}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-secondary">{p.pedidos}</td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-primary font-medium">
+                  {formatARS(p.ventas)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-secondary">
+                  {formatARS(p.beneficioBruto)}
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-secondary">
+                  {p.margenBruto.toFixed(1)}%
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-secondary">
+                  {p.publicidadPct.toFixed(1)}%
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-secondary">
+                  {p.roas.toFixed(2)}x
+                </td>
+                <td className={`px-3 py-2 text-right tabular-nums font-medium ${
+                  p.resultadoDelivery >= 0 ? 'text-positive' : 'text-negative'
+                }`}>
+                  {p.resultadoDelivery >= 0 ? '+' : ''}{formatARS(p.resultadoDelivery)}
+                </td>
+                <td className={`px-3 py-2 text-right tabular-nums font-medium ${
+                  p.beneficioNeto >= 0 ? 'text-positive' : 'text-negative'
+                }`}>
+                  {formatARS(p.beneficioNeto)}
+                </td>
+                <td className={`px-3 py-2 text-right tabular-nums font-semibold rounded-sm ${colorMargen(p.margenNeto, bandas)} ${bgMargen(p.margenNeto, bandas)}`}>
+                  {p.margenNeto.toFixed(1)}%
+                </td>
+                <td className="px-3 py-2 text-right tabular-nums text-text-secondary">
+                  {formatARS(p.ticketPromedio)}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+          {/* Fila de promedios */}
+          <tfoot>
+            <tr className="border-t-2 border-border bg-surface-alt font-medium text-xs">
+              <td className="px-3 py-2.5 text-text-muted">Promedio ({n} sem.)</td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">
+                {Math.round(avg(p => p.pedidos))}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-text-primary">
+                {formatARS(avg(p => p.ventas))}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">
+                {formatARS(avg(p => p.beneficioBruto))}
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">
+                {avg(p => p.margenBruto).toFixed(1)}%
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">
+                {avg(p => p.publicidadPct).toFixed(1)}%
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">
+                {avg(p => p.roas).toFixed(2)}x
+              </td>
+              <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${
+                avg(p => p.resultadoDelivery) >= 0 ? 'text-positive' : 'text-negative'
+              }`}>
+                {avg(p => p.resultadoDelivery) >= 0 ? '+' : ''}{formatARS(avg(p => p.resultadoDelivery))}
+              </td>
+              <td className={`px-3 py-2.5 text-right tabular-nums font-medium ${
+                avg(p => p.beneficioNeto) >= 0 ? 'text-positive' : 'text-negative'
+              }`}>
+                {formatARS(avg(p => p.beneficioNeto))}
+              </td>
+              <td className={`px-3 py-2.5 text-right tabular-nums font-semibold ${
+                colorMargen(avg(p => p.margenNeto), bandas)
+              }`}>
+                {avg(p => p.margenNeto).toFixed(1)}%
+              </td>
+              <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">
+                {formatARS(avg(p => p.ticketPromedio))}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 // ─── Componente principal ───────────────────────────────────────────────
 
 export default function DashboardPage() {
@@ -327,6 +1721,7 @@ export default function DashboardPage() {
   const [confirmandoCierre, setConfirmandoCierre] = useState(false);
 
   // ── Evolución ────────────────────────────────────────────────────────
+  const [evolucionTab, setEvolucionTab] = useState<'resumen' | 'rentabilidad' | 'clientes' | 'tabla'>('resumen');
   const [evolucionCantidad, setEvolucionCantidad] = useState<number | null>(8);
   const [evolucionDatos, setEvolucionDatos] = useState<PeriodoCerrado[]>([]);
   const [records, setRecords] = useState<{
@@ -334,7 +1729,40 @@ export default function DashboardPage() {
     beneficioNeto: RecordHistorico | null;
     hamburguesasVendidas: RecordHistorico | null;
   } | null>(null);
+  const [bandasMargen, setBandasMargen] = useState<BandasMargen | null>(null);
   const [loadingEvolucion, setLoadingEvolucion] = useState(true);
+
+  // ── Salud de Clientes ────────────────────────────────────────────────
+  // Carga independiente del rango — es un análisis en vivo, no por período.
+  const [saludClientes, setSaludClientes] = useState<SaludClientes | null>(null);
+  const [loadingSalud, setLoadingSalud] = useState(true);
+
+  // ── Auditoría Financiera Inteligente ────────────────────────────────
+  const [semaforoEnVivo, setSemaforoEnVivo] = useState<Semaforo | null>(null);
+  const [comparacionReciente, setComparacionReciente] = useState<ComparacionPeriodos | null>(
+    null
+  );
+  const [loadingAuditoria, setLoadingAuditoria] = useState(true);
+
+  async function loadAuditoria(kpisActual: KpisConDelta | null) {
+    setLoadingAuditoria(true);
+    try {
+      const [comparacion] = await Promise.all([compararUltimasDosSemanas()]);
+      setComparacionReciente(comparacion);
+
+      if (kpisActual) {
+        const sem = await obtenerSemaforoEnVivo(kpisActual.actual);
+        setSemaforoEnVivo(sem);
+      }
+    } catch {
+      // La Auditoría no es crítica para el resto del dashboard — si falla,
+      // simplemente no se muestra esa sección.
+      setComparacionReciente(null);
+      setSemaforoEnVivo(null);
+    } finally {
+      setLoadingAuditoria(false);
+    }
+  }
 
   async function loadData(r: Rango) {
     const requestId = ++requestIdRef.current;
@@ -355,6 +1783,10 @@ export default function DashboardPage() {
       setGastos(gastosData);
       setRanking(rankingData);
       setIngredientes(ingredientesData);
+
+      if (requestId === requestIdRef.current) {
+        loadAuditoria(kpisData);
+      }
 
       // El estado de "cerrada / no cerrada" solo aplica a semanas — Mes,
       // Trimestre, Año y Personalizado no tienen cierre propio.
@@ -382,15 +1814,15 @@ export default function DashboardPage() {
   async function loadEvolucion() {
     setLoadingEvolucion(true);
     try {
-      const [datos, recordsData] = await Promise.all([
+      const [datos, recordsData, bandas] = await Promise.all([
         obtenerEvolucion(evolucionCantidad),
         obtenerRecords(),
+        obtenerBandasMargen(),
       ]);
       setEvolucionDatos(datos);
       setRecords(recordsData);
+      setBandasMargen(bandas);
     } catch {
-      // La sección de Evolución no es crítica para el resto del dashboard
-      // — si falla, no bloquea ni muestra el error global de arriba.
       setEvolucionDatos([]);
     } finally {
       setLoadingEvolucion(false);
@@ -401,6 +1833,23 @@ export default function DashboardPage() {
     loadEvolucion();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [evolucionCantidad]);
+
+  async function loadSaludClientes() {
+    setLoadingSalud(true);
+    try {
+      const data = await obtenerSaludClientes();
+      setSaludClientes(data);
+    } catch {
+      setSaludClientes(null);
+    } finally {
+      setLoadingSalud(false);
+    }
+  }
+
+  useEffect(() => {
+    loadSaludClientes();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   function cambiarTipo(tipo: TipoRango) {
     setTipoSeleccionado(tipo);
@@ -487,15 +1936,16 @@ export default function DashboardPage() {
     if (!kpis) return;
     setConfirmandoCierre(true);
     try {
-      const r = await cerrarPeriodo(rango, kpis.actual);
+      const r = await cerrarPeriodo(rango, kpis.actual, ranking, gastos);
       if (!r.ok) {
         showToast(r.mensaje, 'error');
       } else {
-        showToast('Semana cerrada correctamente');
+        showToast('Semana cerrada correctamente, con detalle de productos y gastos');
         setModalCierreAbierto(false);
         const periodo = await obtenerPeriodoActual(rango.desde, rango.hasta);
         setPeriodoCerradoActual(periodo);
         loadEvolucion();
+        loadAuditoria(kpis);
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Error al cerrar el período', 'error');
@@ -505,11 +1955,34 @@ export default function DashboardPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6" id="dashboard-root">
+      {/* ── Cabecera visible solo en impresión ──────────────────────── */}
+      <div data-print="only" className="hidden border-b border-border pb-4 mb-2">
+        <div className="flex items-start justify-between">
+          <div>
+            <div className="text-xl font-bold text-text-primary">Royalty Burgers</div>
+            <div className="mt-0.5 text-sm text-text-secondary">Resumen ejecutivo de gestión</div>
+          </div>
+          <div className="text-right text-sm text-text-muted">
+            <div className="font-medium text-text-primary">{rango.label}</div>
+            <div>Generado el {new Date().toLocaleDateString('es-AR', { day: 'numeric', month: 'long', year: 'numeric' })}</div>
+          </div>
+        </div>
+      </div>
+
       {/* ── Header + selector de rango ──────────────────────────────── */}
-      <div className="space-y-4">
+      <div className="space-y-4" data-print="hidden">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <h1 className="text-lg font-semibold text-text-primary">Dashboard</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-lg font-semibold text-text-primary">Dashboard</h1>
+            <button
+              onClick={() => window.print()}
+              className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+              title="Exportar PDF"
+            >
+              ↓ Exportar PDF
+            </button>
+          </div>
 
           {/* Selector de tipo de rango */}
           <div className="flex flex-wrap gap-1 rounded-lg border border-border bg-surface-alt p-1">
@@ -624,7 +2097,7 @@ export default function DashboardPage() {
       </div>
 
       {error && (
-        <div className="rounded-lg border border-negative bg-negative-bg px-4 py-3 text-sm text-negative">
+        <div data-print="hidden" className="rounded-lg border border-negative bg-negative-bg px-4 py-3 text-sm text-negative">
           {error}
         </div>
       )}
@@ -634,7 +2107,7 @@ export default function DashboardPage() {
       ) : kpis ? (
         <div className={loading ? 'space-y-6 opacity-60 transition-opacity' : 'space-y-6'}>
           {/* ── KPI Cards ──────────────────────────────────────────── */}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          <div data-print="section" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <KpiCard titulo="Pedidos" valor={kpis.actual.pedidos.toString()}>
               <Delta actual={kpis.actual.pedidos} anterior={kpis.anterior?.pedidos ?? null} />
             </KpiCard>
@@ -714,6 +2187,30 @@ export default function DashboardPage() {
                 actual={kpis.actual.publicidadPct}
                 anterior={kpis.anterior?.publicidadPct ?? null}
                 invertido
+                esPuntoPorcentual
+              />
+            </KpiCard>
+
+            {/* ── Clientes repetidores en el período ── */}
+            <KpiCard
+              titulo="Pedidos de clientes conocidos"
+              valor={`${kpis.actual.pedidosRepetidores} / ${kpis.actual.pedidos}`}
+            >
+              <Delta
+                actual={kpis.actual.pedidosRepetidores}
+                anterior={kpis.anterior?.pedidosRepetidores ?? null}
+              />
+            </KpiCard>
+            <KpiCard titulo="Ventas — clientes conocidos" valor={formatARS(kpis.actual.ventasRepetidores)}>
+              <Delta
+                actual={kpis.actual.ventasRepetidores}
+                anterior={kpis.anterior?.ventasRepetidores ?? null}
+              />
+            </KpiCard>
+            <KpiCard titulo="% ventas clientes conocidos" valor={formatPercent(kpis.actual.pctVentasRepetidores)}>
+              <Delta
+                actual={kpis.actual.pctVentasRepetidores}
+                anterior={kpis.anterior?.pctVentasRepetidores ?? null}
                 esPuntoPorcentual
               />
             </KpiCard>
@@ -863,6 +2360,24 @@ export default function DashboardPage() {
             )}
           </div>
 
+          {/* ── Auditoría Financiera Inteligente ─────────────────────── */}
+          {!loadingAuditoria && semaforoEnVivo && (
+            <SemaforoSalud semaforo={semaforoEnVivo} />
+          )}
+
+          {!loadingAuditoria && comparacionReciente && (
+            <QueCambio comparacion={comparacionReciente} />
+          )}
+
+          {!loadingAuditoria && !comparacionReciente && (
+            <div className="rounded-lg border border-border bg-surface p-5 text-center">
+              <p className="text-sm text-text-muted">
+                ¿Qué cambió? necesita al menos 2 semanas cerradas para comparar. Cerrá la semana
+                actual o anteriores desde el selector de período arriba.
+              </p>
+            </div>
+          )}
+
           {/* ── Rankings de productos ──────────────────────────────── */}
           <div className="rounded-lg border border-border bg-surface p-5">
             <div className="mb-3 flex items-center justify-between">
@@ -964,9 +2479,53 @@ export default function DashboardPage() {
 
       {/* ── Evolución ──────────────────────────────────────────────────── */}
       <div className="space-y-4">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <h2 className="text-base font-semibold text-text-primary">Evolución</h2>
-          <div className="flex items-center gap-2 text-sm">
+        <div data-print="hidden" className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center gap-3">
+            <h2 className="text-base font-semibold text-text-primary">Evolución</h2>
+            <div className="flex gap-1 rounded-lg bg-surface-alt p-1">
+              <button
+                onClick={() => setEvolucionTab('resumen')}
+                className={`rounded-md px-3 py-1 text-xs ${
+                  evolucionTab === 'resumen'
+                    ? 'bg-surface font-medium text-text-primary shadow-sm'
+                    : 'text-text-secondary'
+                }`}
+              >
+                Resumen general
+              </button>
+              <button
+                onClick={() => setEvolucionTab('rentabilidad')}
+                className={`rounded-md px-3 py-1 text-xs ${
+                  evolucionTab === 'rentabilidad'
+                    ? 'bg-surface font-medium text-text-primary shadow-sm'
+                    : 'text-text-secondary'
+                }`}
+              >
+                Rentabilidad
+              </button>
+              <button
+                onClick={() => setEvolucionTab('clientes')}
+                className={`rounded-md px-3 py-1 text-xs ${
+                  evolucionTab === 'clientes'
+                    ? 'bg-surface font-medium text-text-primary shadow-sm'
+                    : 'text-text-secondary'
+                }`}
+              >
+                Clientes
+              </button>
+              <button
+                onClick={() => setEvolucionTab('tabla')}
+                className={`rounded-md px-3 py-1 text-xs ${
+                  evolucionTab === 'tabla'
+                    ? 'bg-surface font-medium text-text-primary shadow-sm'
+                    : 'text-text-secondary'
+                }`}
+              >
+                Tabla semanal
+              </button>
+            </div>
+          </div>
+          <div className={`flex items-center gap-2 text-sm ${evolucionTab === 'clientes' || evolucionTab === 'tabla' ? 'invisible' : ''}`}>
             <span className="text-text-muted">Mostrar:</span>
             <select
               value={evolucionCantidad === null ? 'todo' : evolucionCantidad}
@@ -994,6 +2553,8 @@ export default function DashboardPage() {
           </div>
         ) : (
           <>
+            {/* ── Tab: Resumen general (9 mini gráficos) ── */}
+            <div className={evolucionTab === 'resumen' ? 'block' : 'hidden'} data-print="section">
             {/* Tarjeta de tendencia reciente */}
             {(() => {
               const ultima = evolucionDatos[evolucionDatos.length - 1];
@@ -1111,13 +2672,76 @@ export default function DashboardPage() {
                 formato={formatARS}
               />
             </div>
+            </div>{/* cierre tab Resumen */}
+
+            {/* ── Tab: Rentabilidad en profundidad ── */}
+            <div className={evolucionTab === 'rentabilidad' ? 'block print:block' : 'hidden print:block'} data-print="section">
+              {bandasMargen ? (
+                <div className="space-y-4">
+                  <GraficoMargenBandas
+                    datos={evolucionDatos}
+                    bandas={bandasMargen}
+                    metricas={[
+                      { key: 'margenNeto',      label: 'Margen neto',          color: '#1D9E75', activa: true  },
+                      { key: 'margenBruto',     label: 'Margen bruto',         color: '#6366f1', activa: false },
+                      { key: 'publicidadPct',   label: 'Publicidad % s/ventas',color: '#f59e0b', activa: false },
+                    ]}
+                  />
+
+                  <div className="rounded-lg border border-border bg-surface p-4">
+                    <div className="text-xs font-medium text-text-muted mb-3">
+                      Evolución semana a semana — Margen Neto %
+                    </div>
+                    <div className="divide-y divide-border/50">
+                      {[...evolucionDatos].reverse().map((p) => {
+                        const zona =
+                          p.margenNeto >= bandasMargen.excelenteMinimo
+                            ? { label: 'Excelente', clase: 'text-positive' }
+                            : p.margenNeto >= bandasMargen.objetivoMinimo
+                            ? { label: 'Objetivo', clase: 'text-positive' }
+                            : p.margenNeto >= bandasMargen.alertaMinimo
+                            ? { label: 'Alerta', clase: 'text-warning' }
+                            : { label: 'Problema', clase: 'text-negative' };
+                        return (
+                          <div key={p.id} className="flex items-center justify-between py-2 text-sm">
+                            <span className="text-text-secondary">{p.label}</span>
+                            <div className="flex items-center gap-3">
+                              <span className={`text-xs font-medium ${zona.clase}`}>
+                                {zona.label}
+                              </span>
+                              <span className="w-14 text-right tabular-nums font-medium text-text-primary">
+                                {p.margenNeto.toFixed(1)}%
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              ) : (
+                <div className="py-8 text-center text-sm text-text-muted">
+                  Cargando bandas de configuración…
+                </div>
+              )}
+            </div>
+
+            {/* ── Tab: Clientes ── */}
+            <div className={evolucionTab === 'clientes' ? 'block print:block' : 'hidden print:block'} data-print="section">
+              <TabSaludClientes salud={saludClientes} loading={loadingSalud} />
+            </div>
+
+            {/* ── Tab: Tabla semanal ── */}
+            <div className={evolucionTab === 'tabla' ? 'block' : 'hidden'} data-print="section">
+              <TabTablaSemanal periodos={evolucionDatos} bandas={bandasMargen} />
+            </div>
           </>
         )}
       </div>
 
       {/* ── Modal de cierre de período ───────────────────────────────────── */}
       {modalCierreAbierto && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+        <div data-print="hidden" className="fixed inset-0 z-50 flex items-center justify-center p-4">
           <div
             className="absolute inset-0 bg-black/20"
             onClick={() => !confirmandoCierre && setModalCierreAbierto(false)}

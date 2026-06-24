@@ -19,6 +19,8 @@ export type ConfigMeta = {
 export type ConfigAlertas = {
   alertaMargenMinimo: number;
   alertaPublicidadMaxima: number;
+  margenObjetivoMinimo: number;   // límite inferior zona Objetivo del gráfico
+  margenExcelenteMinimo: number;  // límite inferior zona Excelente del gráfico
 };
 
 export type ConfigProductosConsumo = {
@@ -159,11 +161,18 @@ export async function obtenerConfigAlertas(): Promise<ConfigAlertas> {
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) throw new Error('No autenticado');
 
-  const map = await leerClaves(supabase, ['alerta_margen_minimo', 'alerta_publicidad_maxima']);
+  const map = await leerClaves(supabase, [
+    'alerta_margen_minimo',
+    'alerta_publicidad_maxima',
+    'margen_objetivo_minimo',
+    'margen_excelente_minimo',
+  ]);
 
   return {
     alertaMargenMinimo: parseNumero(map.get('alerta_margen_minimo')),
     alertaPublicidadMaxima: parseNumero(map.get('alerta_publicidad_maxima')),
+    margenObjetivoMinimo: parseNumero(map.get('margen_objetivo_minimo')) || 50,
+    margenExcelenteMinimo: parseNumero(map.get('margen_excelente_minimo')) || 60,
   };
 }
 
@@ -175,19 +184,23 @@ export async function guardarConfigAlertas(
   if (!user.user) throw new Error('No autenticado');
 
   if (config.alertaMargenMinimo < 0 || config.alertaMargenMinimo > 100) {
-    return { ok: false, mensaje: 'El margen mínimo debe estar entre 0 y 100%.' };
+    return { ok: false, mensaje: 'El margen mínimo de alerta debe estar entre 0 y 100%.' };
   }
   if (config.alertaPublicidadMaxima < 0 || config.alertaPublicidadMaxima > 100) {
     return { ok: false, mensaje: 'La publicidad máxima debe estar entre 0 y 100%.' };
   }
+  if (config.margenObjetivoMinimo <= config.alertaMargenMinimo) {
+    return { ok: false, mensaje: 'El margen Objetivo debe ser mayor que el margen de Alerta.' };
+  }
+  if (config.margenExcelenteMinimo <= config.margenObjetivoMinimo) {
+    return { ok: false, mensaje: 'El margen Excelente debe ser mayor que el margen Objetivo.' };
+  }
 
   try {
     await actualizarClave(supabase, 'alerta_margen_minimo', String(config.alertaMargenMinimo));
-    await actualizarClave(
-      supabase,
-      'alerta_publicidad_maxima',
-      String(config.alertaPublicidadMaxima)
-    );
+    await actualizarClave(supabase, 'alerta_publicidad_maxima', String(config.alertaPublicidadMaxima));
+    await actualizarClave(supabase, 'margen_objetivo_minimo', String(config.margenObjetivoMinimo));
+    await actualizarClave(supabase, 'margen_excelente_minimo', String(config.margenExcelenteMinimo));
     return { ok: true };
   } catch (err) {
     return { ok: false, mensaje: err instanceof Error ? err.message : 'Error al guardar' };

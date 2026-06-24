@@ -9,9 +9,10 @@ export default function AdminLayout({
   return (
     <div className="min-h-screen">
       <Sidebar />
-      <div className="ml-56">
+      {/* print:ml-0 resetea el margen del sidebar en impresión */}
+      <div className="ml-56 print:ml-0">
         <AdminHeader />
-        <main className="p-6">{children}</main>
+        <main className="p-6 print:p-0">{children}</main>
       </div>
     </div>
   )

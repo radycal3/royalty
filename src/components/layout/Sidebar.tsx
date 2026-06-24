@@ -42,7 +42,7 @@ export default function Sidebar() {
   }
 
   return (
-    <aside className="fixed top-0 left-0 h-screen w-56 bg-sidebar flex flex-col z-30">
+    <aside className="fixed top-0 left-0 h-screen w-56 bg-sidebar flex flex-col z-30 print:hidden">
       {/* Logo */}
       <div className="px-5 py-5 flex items-center gap-2.5">
         <Crown className="w-6 h-6 text-brand" />

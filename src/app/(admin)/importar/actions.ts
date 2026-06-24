@@ -355,9 +355,31 @@ export async function importarPedidos(input: {
       // Extraer fecha del pedido como YYYY-MM-DD para resolución de costos
       const fechaPedido = pedido.fecha; // Ya viene como YYYY-MM-DD del parser
 
+      // ── Resolver cliente por celular ────────────────────────────────
+      // Si el pedido tiene celular normalizado, hace upsert en clientes
+      // y obtiene el cliente_id. Si no tiene celular, sigue sin cliente.
+      // El upsert usa el celular normalizado como clave única — así
+      // "341-621-4667" y "3416214667" resuelven al mismo cliente.
+      // El nombre se actualiza siempre con el más reciente (last write
+      // wins): es solo una referencia legible, no un dato financiero.
+      let clienteId: string | null = null;
+
+      if (pedido.celular) {
+        const { data: clienteData } = await admin
+          .from('clientes')
+          .upsert(
+            { celular: pedido.celular, nombre_referencia: pedido.cliente || null },
+            { onConflict: 'celular', ignoreDuplicates: false }
+          )
+          .select('id')
+          .single();
+        clienteId = clienteData?.id || null;
+      }
+
       // Insertar pedido
       // Esquema real: id, importacion_id, pedido_pedix_id, fecha, hora,
-      //               envio_cobrado, created_at
+      //               envio_cobrado, cliente_id, cliente_celular,
+      //               cliente_nombre, cliente_direccion, created_at
       const { data: pedidoRow, error: errPed } = await admin
         .from('pedidos')
         .insert({
@@ -366,6 +388,10 @@ export async function importarPedidos(input: {
           fecha: pedido.fecha,
           hora: pedido.hora || null,
           envio_cobrado: pedido.envioCobrado || 0,
+          cliente_id: clienteId,
+          cliente_celular: pedido.celular || null,
+          cliente_nombre: pedido.cliente || null,
+          cliente_direccion: pedido.direccion || null,
         })
         .select('id')
         .single();
