@@ -1189,17 +1189,17 @@ function TabSaludClientes({
   const cfg = CONFIG_SEMAFORO[estadoCartera];
 
   // Frase del semáforo: basada 100% en los números, sin adjetivos inventados
-  function fraseSemaforo(): string {
+  function fraseSemaforo(s: SaludClientes): string {
     const partes: string[] = [];
-    partes.push(`Retención de cartera ${salud.retencionCartera.toFixed(1)}%`);
+    partes.push(`Retención de cartera ${s.retencionCartera.toFixed(1)}%`);
     if (!sinDatosTendencia) {
       const { label } = etiquetaTendencia(diffTendencia);
       partes.push(`${label.toLowerCase()} en tendencia reciente (${diffTendencia > 0 ? '+' : ''}${diffTendencia.toFixed(1)} pp)`);
     } else {
       partes.push('tendencia sin datos suficientes');
     }
-    if (salud.altoValorEnRiesgo > 0) {
-      partes.push(`${salud.altoValorEnRiesgo} cliente${salud.altoValorEnRiesgo !== 1 ? 's' : ''} de alto valor sin volver`);
+    if (s.altoValorEnRiesgo > 0) {
+      partes.push(`${s.altoValorEnRiesgo} cliente${s.altoValorEnRiesgo !== 1 ? 's' : ''} de alto valor sin volver`);
     }
     return partes.join(', ') + '.';
   }
@@ -1216,7 +1216,7 @@ function TabSaludClientes({
           <div className="flex-1">
             <div className="flex flex-wrap items-baseline gap-2">
               <span className={`text-sm font-bold ${cfg.claseIcono}`}>{cfg.label}</span>
-              <span className="text-sm text-text-primary">{fraseSemaforo()}</span>
+              <span className="text-sm text-text-primary">{fraseSemaforo(salud)}</span>
             </div>
             {salud.altoValorEnRiesgo > 0 && (
               <button

@@ -21,13 +21,14 @@ import {
   useToast,
 } from '@/components/ui';
 import { formatARS, formatDate } from '@/lib/utils/format';
-import type { ConsumoLinea, ConsumoResumen, ProductoParaConsumo, PeriodoInfo } from './actions';
+import type { ConsumoLinea, ConsumoResumen, ProductoParaConsumo } from './actions';
 import {
   obtenerProductosParaConsumo,
   obtenerConsumosPeriodo,
   registrarConsumo,
   eliminarConsumo,
 } from './actions';
+import type { PeriodoInfo } from '../gastos/actions';
 import {
   obtenerPeriodoActual,
   obtenerPeriodoPorOffset,

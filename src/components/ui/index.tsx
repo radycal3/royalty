@@ -161,10 +161,25 @@ export function Badge({
 
 // ─── Empty State ───
 
-export function EmptyState({ message, action }: { message: string; action?: ReactNode }) {
+export function EmptyState({
+  message,
+  title,
+  description,
+  icon,
+  action,
+}: {
+  message?: string
+  title?: string
+  description?: string
+  icon?: ReactNode
+  action?: ReactNode
+}) {
   return (
     <div className="text-center py-12">
-      <p className="text-sm text-text-muted">{message}</p>
+      {icon && <div className="flex justify-center mb-3 text-text-muted">{icon}</div>}
+      {title && <p className="text-sm font-medium text-text-primary">{title}</p>}
+      {description && <p className="text-sm text-text-muted mt-1">{description}</p>}
+      {message && <p className="text-sm text-text-muted">{message}</p>}
       {action && <div className="mt-4">{action}</div>}
     </div>
   )

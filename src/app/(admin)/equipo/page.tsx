@@ -29,7 +29,9 @@ import {
 
 // ─── Constantes ────────────────────────────────────────────────────────────
 
-const ROLES: { value: Rol; label: string; color: string }[] = [
+type BadgeColor = 'gray' | 'green' | 'red' | 'yellow';
+
+const ROLES: { value: Rol; label: string; color: BadgeColor }[] = [
   { value: 'cadete', label: 'Cadete', color: 'yellow' },
   { value: 'cocina', label: 'Cocina', color: 'red' },
   { value: 'caja', label: 'Caja', color: 'green' },
@@ -40,7 +42,7 @@ const ROL_LABELS: Record<string, string> = Object.fromEntries(
   ROLES.map((r) => [r.value, r.label])
 );
 
-const ROL_COLORS: Record<string, string> = Object.fromEntries(
+const ROL_COLORS: Record<string, BadgeColor> = Object.fromEntries(
   ROLES.map((r) => [r.value, r.color])
 );
 
