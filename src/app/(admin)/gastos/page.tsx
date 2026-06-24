@@ -10,6 +10,7 @@ import {
   DollarSign,
   TrendingDown,
   Lock,
+  Upload,
 } from 'lucide-react';
 import {
   SidePanel,
@@ -38,6 +39,14 @@ import {
   actualizarGasto,
   eliminarGasto,
 } from './actions';
+import type { MetaAdsImportacion } from './actions-meta-ads';
+import {
+  obtenerMetaAdsPeriodo,
+  obtenerGastoPublicidadExistente,
+  importarMetaAds,
+  eliminarMetaAdsPeriodo,
+} from './actions-meta-ads';
+import { parseMetaAdsCsv, type MetaAdsParseResult } from '@/lib/utils/meta-ads-parser';
 
 // ─── Constantes ────────────────────────────────────────────────────────────
 
@@ -67,6 +76,7 @@ export default function GastosPage() {
   const [resumen, setResumen] = useState<ResumenGastos | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [showNew, setShowNew] = useState(false);
+  const [showImportMeta, setShowImportMeta] = useState(false);
   const [editingGasto, setEditingGasto] = useState<GastoOperativo | null>(null);
   const [pending, startTransition] = useTransition();
   const { show, Toast } = useToast();
@@ -146,10 +156,16 @@ export default function GastosPage() {
             Registrá los gastos de cada período para calcular el beneficio neto.
           </p>
         </div>
-        <Button onClick={() => setShowNew(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          Nuevo gasto
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="secondary" onClick={() => setShowImportMeta(true)}>
+            <Upload className="w-4 h-4 mr-2" />
+            Importar Meta Ads
+          </Button>
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            Nuevo gasto
+          </Button>
+        </div>
       </div>
 
       {/* Selector de período */}
@@ -341,6 +357,16 @@ export default function GastosPage() {
         )}
       </SidePanel>
 
+      {/* SidePanel: Importar Meta Ads */}
+      <SidePanel open={showImportMeta} onClose={() => setShowImportMeta(false)} title="Importar Meta Ads">
+        {periodo && (
+          <FormImportarMetaAds
+            periodo={periodo}
+            onDone={() => { setShowImportMeta(false); loadGastos(periodo.viernes); }}
+          />
+        )}
+      </SidePanel>
+
       <Toast />
     </div>
   );
@@ -457,5 +483,176 @@ function FormGasto({
         {initial ? 'Guardar cambios' : 'Registrar gasto'}
       </Button>
     </form>
+  );
+}
+
+// ─── Importar Meta Ads ──────────────────────────────────────────────────────
+
+function FormImportarMetaAds({
+  periodo,
+  onDone,
+}: {
+  periodo: PeriodoInfo;
+  onDone: () => void;
+}) {
+  const [importacionExistente, setImportacionExistente] = useState<MetaAdsImportacion | null>(null);
+  const [gastoPublicidadExistente, setGastoPublicidadExistente] = useState(0);
+  const [loaded, setLoaded] = useState(false);
+
+  const [nombreArchivo, setNombreArchivo] = useState<string | null>(null);
+  const [parsed, setParsed] = useState<MetaAdsParseResult | null>(null);
+  const [parseError, setParseError] = useState<string | null>(null);
+  const [tipoCambio, setTipoCambio] = useState('');
+  const [pending, setPending] = useState(false);
+  const { show, Toast } = useToast();
+
+  useEffect(() => {
+    (async () => {
+      const [imp, gastoExistente] = await Promise.all([
+        obtenerMetaAdsPeriodo(periodo.viernes),
+        obtenerGastoPublicidadExistente(periodo.viernes, periodo.fechaHasta),
+      ]);
+      setImportacionExistente(imp);
+      setGastoPublicidadExistente(gastoExistente);
+      setLoaded(true);
+    })();
+  }, [periodo.viernes]);
+
+  function handleArchivo(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setParseError(null);
+    setParsed(null);
+    setNombreArchivo(file.name);
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const resultado = parseMetaAdsCsv(String(reader.result));
+        setParsed(resultado);
+      } catch (err) {
+        setParseError(err instanceof Error ? err.message : 'No se pudo leer el archivo');
+      }
+    };
+    reader.onerror = () => setParseError('No se pudo leer el archivo');
+    reader.readAsText(file);
+  }
+
+  const tipoCambioNum = parseFloat(tipoCambio);
+  const gastoArs = parsed && tipoCambioNum > 0 ? Math.round(parsed.gastoUsd * tipoCambioNum * 100) / 100 : null;
+
+  async function handleConfirmar() {
+    if (!parsed || !tipoCambioNum || tipoCambioNum <= 0) return;
+    setPending(true);
+    const r = await importarMetaAds({
+      periodoDesde: periodo.viernes,
+      periodoHasta: periodo.fechaHasta,
+      gastoUsd: parsed.gastoUsd,
+      tipoCambio: tipoCambioNum,
+      alcance: parsed.alcance,
+      impresiones: parsed.impresiones,
+      clics: parsed.clics,
+      resultados: parsed.resultados,
+      nombreArchivo,
+    });
+    setPending(false);
+    if ('error' in r) { show(r.error, 'error'); return; }
+    show('Meta Ads importado correctamente');
+    onDone();
+  }
+
+  async function handleEliminarImportacion() {
+    setPending(true);
+    const r = await eliminarMetaAdsPeriodo(periodo.viernes);
+    setPending(false);
+    if (r.error) { show(r.error, 'error'); return; }
+    show('Importación eliminada');
+    onDone();
+  }
+
+  if (!loaded) {
+    return <div className="text-text-muted text-sm py-6 text-center">Cargando...</div>;
+  }
+
+  return (
+    <div className="space-y-5">
+      <p className="text-sm text-text-secondary">
+        Período: <span className="font-medium text-text-primary">{periodo.label}</span>
+      </p>
+
+      {importacionExistente && (
+        <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm">
+          <p className="text-text-primary font-medium">Ya hay una importación para esta semana</p>
+          <p className="mt-1 text-text-secondary">
+            USD {importacionExistente.gastoUsd.toLocaleString('es-AR')} × ${importacionExistente.tipoCambio} ={' '}
+            {formatARS(importacionExistente.gastoArs)}
+            {importacionExistente.nombreArchivo && <> ({importacionExistente.nombreArchivo})</>}
+          </p>
+          <button
+            onClick={handleEliminarImportacion}
+            disabled={pending}
+            className="mt-2 text-xs text-negative underline underline-offset-2 hover:no-underline"
+          >
+            Eliminar esta importación
+          </button>
+        </div>
+      )}
+
+      {!importacionExistente && gastoPublicidadExistente > 0 && (
+        <div className="rounded-lg border border-warning bg-warning-bg px-3 py-2.5 text-sm text-warning">
+          Ya hay {formatARS(gastoPublicidadExistente)} cargado como publicidad esta semana (manual). Importar acá lo
+          va a reemplazar.
+        </div>
+      )}
+
+      <Field label="Archivo CSV exportado de Meta Ads Manager">
+        <input
+          type="file"
+          accept=".csv,text/csv"
+          onChange={handleArchivo}
+          className="block w-full text-sm text-text-secondary"
+        />
+      </Field>
+
+      {parseError && (
+        <p className="text-sm text-negative bg-negative-bg rounded-lg px-3 py-2">{parseError}</p>
+      )}
+
+      {parsed && (
+        <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm space-y-1">
+          <p className="text-text-primary font-medium">Detectado ({parsed.filasDetectadas} fila{parsed.filasDetectadas !== 1 ? 's' : ''}):</p>
+          <p className="text-text-secondary">Gasto: USD {parsed.gastoUsd.toLocaleString('es-AR')}</p>
+          {parsed.alcance != null && <p className="text-text-secondary">Alcance: {parsed.alcance.toLocaleString('es-AR')}</p>}
+          {parsed.impresiones != null && <p className="text-text-secondary">Impresiones: {parsed.impresiones.toLocaleString('es-AR')}</p>}
+          {parsed.clics != null && <p className="text-text-secondary">Clics: {parsed.clics.toLocaleString('es-AR')}</p>}
+          {parsed.resultados != null && <p className="text-text-secondary">Resultados: {parsed.resultados.toLocaleString('es-AR')}</p>}
+        </div>
+      )}
+
+      <Field label="Tipo de cambio del día" hint="Ej: 1250">
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          value={tipoCambio}
+          onChange={(e) => setTipoCambio(e.target.value)}
+          placeholder="1250"
+        />
+      </Field>
+
+      {gastoArs != null && (
+        <p className="text-sm text-text-primary">
+          Se va a cargar como gasto de publicidad: <span className="font-semibold">{formatARS(gastoArs)}</span>
+        </p>
+      )}
+
+      <Button
+        onClick={handleConfirmar}
+        disabled={pending || !parsed || !tipoCambioNum || tipoCambioNum <= 0}
+        className="w-full"
+      >
+        {pending ? 'Importando...' : 'Confirmar importación'}
+      </Button>
+    </div>
   );
 }

@@ -331,6 +331,26 @@ export type BandasMargen = {
   excelenteMinimo: number; // = margen_excelente_minimo (nuevo)
 };
 
+// ─── Eliminar un cierre (para corregirlo y volver a cerrar) ────────────────
+// Borra la fila de periodos — periodos_productos y periodos_gastos caen en
+// cascada (ON DELETE CASCADE). No toca gastos_operativos, pedidos ni
+// ninguna tabla operativa: solo el snapshot congelado. Pensado para
+// corregir datos de una semana ya cerrada (ej. reimportar Meta Ads) y
+// volver a cerrarla después con cerrarPeriodo().
+
+export async function eliminarCierre(periodoId: string): Promise<{ ok: true } | { ok: false; mensaje: string }> {
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error('No autenticado');
+
+  const { data: yo } = await supabase.from('usuarios').select('rol').eq('id', auth.user.id).single();
+  if (yo?.rol !== 'admin') throw new Error('No autorizado');
+
+  const { error } = await supabase.from('periodos').delete().eq('id', periodoId);
+  if (error) return { ok: false, mensaje: error.message };
+  return { ok: true };
+}
+
 export async function obtenerBandasMargen(): Promise<BandasMargen> {
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();

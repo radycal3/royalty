@@ -38,6 +38,7 @@ import {
   obtenerEvolucion,
   obtenerRecords,
   obtenerBandasMargen,
+  eliminarCierre,
   type ValidacionCierre,
   type PeriodoCerrado,
   type RecordHistorico,
@@ -1754,12 +1755,66 @@ function bgMargen(margen: number, bandas: BandasMargen | null): string {
   return 'bg-negative-bg';
 }
 
+function AccionEliminarCierre({ periodo, onEliminado }: { periodo: PeriodoCerrado; onEliminado: () => void }) {
+  const [confirmando, setConfirmando] = useState(false);
+  const [pending, setPending] = useState(false);
+  const { show, Toast } = useToast();
+
+  async function handleConfirmar() {
+    setPending(true);
+    const r = await eliminarCierre(periodo.id);
+    setPending(false);
+    if (!r.ok) { show(r.mensaje, 'error'); return; }
+    show('Cierre eliminado. Podés corregir los gastos y volver a cerrar la semana.');
+    setConfirmando(false);
+    onEliminado();
+  }
+
+  if (confirmando) {
+    return (
+      <div className="flex items-center justify-end gap-2 whitespace-nowrap">
+        <span className="text-[11px] text-negative">¿Borrar el snapshot de esta semana?</span>
+        <button
+          onClick={handleConfirmar}
+          disabled={pending}
+          className="rounded-md bg-negative px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
+        >
+          {pending ? '...' : 'Sí, eliminar'}
+        </button>
+        <button
+          onClick={() => setConfirmando(false)}
+          disabled={pending}
+          className="rounded-md border border-border px-2 py-1 text-[11px] text-text-secondary hover:bg-surface-alt"
+        >
+          Cancelar
+        </button>
+        <Toast />
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-center justify-end">
+      <button
+        onClick={() => setConfirmando(true)}
+        className="text-[11px] text-text-muted underline underline-offset-2 hover:text-negative"
+        title="Elimina el cierre congelado de esta semana para poder corregirla y volver a cerrarla"
+      >
+        Eliminar cierre
+      </button>
+      <Toast />
+    </div>
+  );
+}
+
 function TabTablaSemanal({
   periodos,
   bandas,
+  onEliminado,
 }: {
   periodos: PeriodoCerrado[];
   bandas: BandasMargen | null;
+  onEliminado: () => void;
 }) {
   if (periodos.length === 0) {
     return (
@@ -1812,6 +1867,7 @@ function TabTablaSemanal({
               <th className="px-3 py-2.5 text-right font-medium">Ben. neto</th>
               <th className="px-3 py-2.5 text-right font-medium">Mg. neto</th>
               <th className="px-3 py-2.5 text-right font-medium">Ticket prom.</th>
+              <th className="px-3 py-2.5 text-right font-medium"></th>
             </tr>
           </thead>
           <tbody className="divide-y divide-border/50">
@@ -1849,6 +1905,9 @@ function TabTablaSemanal({
                 </td>
                 <td className="px-3 py-2 text-right tabular-nums text-text-secondary">
                   {formatARS(p.ticketPromedio)}
+                </td>
+                <td className="px-3 py-2 text-right">
+                  <AccionEliminarCierre periodo={p} onEliminado={onEliminado} />
                 </td>
               </tr>
             ))}
@@ -1893,6 +1952,7 @@ function TabTablaSemanal({
               <td className="px-3 py-2.5 text-right tabular-nums text-text-secondary">
                 {formatARS(avg(p => p.ticketPromedio))}
               </td>
+              <td className="px-3 py-2.5"></td>
             </tr>
           </tfoot>
         </table>
@@ -2980,7 +3040,7 @@ export default function DashboardPage() {
 
             {/* ── Tab: Tabla semanal ── */}
             <div className={evolucionTab === 'tabla' ? 'block' : 'hidden'} data-print="section">
-              <TabTablaSemanal periodos={evolucionDatos} bandas={bandasMargen} />
+              <TabTablaSemanal periodos={evolucionDatos} bandas={bandasMargen} onEliminado={loadEvolucion} />
             </div>
           </>
         )}

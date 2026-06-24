@@ -7,6 +7,7 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { calcularKpis, obtenerSaludClientes } from '../dashboard/actions';
 import { obtenerAnalisisMerma } from '../stock/actions';
 import { obtenerMetricasHistorico, obtenerMetricasPeriodo } from '../equipo/actions';
+import { obtenerMetaAdsPeriodo } from '../gastos/actions-meta-ads';
 import { formatARS } from '@/lib/utils/format';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -142,6 +143,7 @@ async function aplicarResumenSugerido(
   };
   const metricasDespues = await obtenerMetricasPeriodo(ultimoCerrado.desde);
   const mermaDespues = await obtenerMermaTotalOpcional(ultimoCerrado.desde, ultimoCerrado.hasta);
+  const metaAdsDespues = await obtenerMetaAdsPeriodo(ultimoCerrado.desde);
 
   for (const d of pendientes) {
     const viernesDecision = viernesDe(d.fechaDecision!);
@@ -155,8 +157,19 @@ async function aplicarResumenSugerido(
     const antes = await obtenerKpisSemana(supabase, viernesDecision, domingoDecision);
     const metricasAntes = await obtenerMetricasPeriodo(viernesDecision);
     const mermaAntes = await obtenerMermaTotalOpcional(viernesDecision, domingoDecision);
+    const metaAdsAntes = await obtenerMetaAdsPeriodo(viernesDecision);
 
-    d.resumenSugerido = construirResumen(d.area, antes, despues, metricasAntes, metricasDespues, mermaAntes, mermaDespues);
+    d.resumenSugerido = construirResumen(
+      d.area,
+      antes,
+      despues,
+      metricasAntes,
+      metricasDespues,
+      mermaAntes,
+      mermaDespues,
+      metaAdsAntes,
+      metaAdsDespues
+    );
   }
 }
 
@@ -251,7 +264,9 @@ function construirResumen(
   metricasAntes: Awaited<ReturnType<typeof obtenerMetricasPeriodo>>,
   metricasDespues: Awaited<ReturnType<typeof obtenerMetricasPeriodo>>,
   mermaAntes: number | null,
-  mermaDespues: number | null
+  mermaDespues: number | null,
+  metaAdsAntes: Awaited<ReturnType<typeof obtenerMetaAdsPeriodo>>,
+  metaAdsDespues: Awaited<ReturnType<typeof obtenerMetaAdsPeriodo>>
 ): string {
   const partes: string[] = [];
 
@@ -270,6 +285,11 @@ function construirResumen(
     partes.push(
       `Publicidad: ${antes.publicidadPct.toFixed(1)}% de ventas → ${despues.publicidadPct.toFixed(1)}% (${pp(despues.publicidadPct - antes.publicidadPct)}).`
     );
+    if (metaAdsAntes && metaAdsDespues) {
+      partes.push(
+        `Meta Ads — Alcance: ${metaAdsAntes.alcance ?? '—'} → ${metaAdsDespues.alcance ?? '—'}. Clics: ${metaAdsAntes.clics ?? '—'} → ${metaAdsDespues.clics ?? '—'}. Resultados: ${metaAdsAntes.resultados ?? '—'} → ${metaAdsDespues.resultados ?? '—'}.`
+      );
+    }
   }
 
   if (areaLower.includes('equipo') || areaLower.includes('queja') || areaLower.includes('mensaje')) {
@@ -354,7 +374,7 @@ const RecomendacionesSchema = z.object({
 
 const SYSTEM_PROMPT = `Sos un asesor estratégico para Royalty Burgers, una hamburguesería en Rosario, Argentina que opera viernes, sábado y domingo.
 
-Vas a recibir un JSON con los KPIs de una semana operativa: financieros, de clientes, de equipo y de merma (si hay datos).
+Vas a recibir un JSON con los KPIs de una semana operativa: financieros, de clientes, de equipo, de Meta Ads y de merma (si hay datos).
 
 Generá entre 3 y 6 recomendaciones ESPECÍFICAS y ACCIONABLES para la semana que viene, basadas estrictamente en los números del JSON — nunca inventes datos que no están ahí. Cada recomendación debe:
 - Apuntar a un área concreta del negocio.
@@ -384,6 +404,8 @@ async function construirContextoKpis(supabase: any, desde: string, hasta: string
 
   const metricasRecientes = await obtenerMetricasHistorico(8);
   const metricaSemana = metricasRecientes.find((m) => m.periodoDesde === desde) ?? null;
+
+  const metaAdsSemana = await obtenerMetaAdsPeriodo(desde);
 
   return {
     periodo: { desde, hasta },
@@ -420,6 +442,15 @@ async function construirContextoKpis(supabase: any, desde: string, hasta: string
           tiempoPromedioProduccionMin: metricaSemana.tiempoPromedioProduccionMin,
           quejasFaltantes: metricaSemana.quejasFaltantes,
           quejasCalidad: metricaSemana.quejasCalidad,
+        }
+      : 'sin_datos_todavia',
+    metaAds: metaAdsSemana
+      ? {
+          gastoUsd: metaAdsSemana.gastoUsd,
+          alcance: metaAdsSemana.alcance,
+          impresiones: metaAdsSemana.impresiones,
+          clics: metaAdsSemana.clics,
+          resultados: metaAdsSemana.resultados,
         }
       : 'sin_datos_todavia',
     merma,
