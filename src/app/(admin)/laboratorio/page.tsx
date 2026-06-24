@@ -161,7 +161,7 @@ function DecisionCard({
   onResultado: (id: string, texto: string) => void;
 }) {
   const [decisionTexto, setDecisionTexto] = useState('');
-  const [resultadoTexto, setResultadoTexto] = useState('');
+  const [resultadoTexto, setResultadoTexto] = useState(decision.resumenSugerido ?? '');
 
   return (
     <div className="rounded-lg border border-border bg-surface p-4">
@@ -205,20 +205,29 @@ function DecisionCard({
         </div>
       )}
       {decision.estado === 'decidida' && (
-        <div className="mt-3 flex gap-2">
-          <Input
-            value={resultadoTexto}
-            onChange={(e) => setResultadoTexto(e.target.value)}
-            placeholder="¿Qué resultó? (podés volver más adelante)"
-            className="flex-1"
-          />
-          <Button
-            size="sm"
-            disabled={pending || !resultadoTexto.trim()}
-            onClick={() => { onResultado(decision.id, resultadoTexto); setResultadoTexto(''); }}
-          >
-            Registrar
-          </Button>
+        <div className="mt-3">
+          {decision.resumenSugerido && (
+            <p className="mb-1.5 text-xs text-text-muted">
+              Comparación automática con la última semana cerrada — revisala y editala antes de confirmar.
+            </p>
+          )}
+          <div className="flex gap-2">
+            <textarea
+              value={resultadoTexto}
+              onChange={(e) => setResultadoTexto(e.target.value)}
+              placeholder="¿Qué resultó? (podés volver más adelante)"
+              rows={decision.resumenSugerido ? 3 : 1}
+              className="flex-1 px-3 py-2 rounded-lg border border-border bg-surface text-text-primary text-sm
+                         placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
+            />
+            <Button
+              size="sm"
+              disabled={pending || !resultadoTexto.trim()}
+              onClick={() => { onResultado(decision.id, resultadoTexto); setResultadoTexto(''); }}
+            >
+              Registrar
+            </Button>
+          </div>
         </div>
       )}
     </div>
@@ -236,7 +245,7 @@ function DecisionPendienteCard({
   pending: boolean;
   onResultado: (id: string, texto: string) => void;
 }) {
-  const [resultadoTexto, setResultadoTexto] = useState('');
+  const [resultadoTexto, setResultadoTexto] = useState(decision.resumenSugerido ?? '');
 
   return (
     <div className="rounded-md bg-surface p-3 text-sm">
@@ -247,12 +256,19 @@ function DecisionPendienteCard({
         </span>
       </div>
       <p className="text-text-primary">{decision.decisionTomada}</p>
+      {decision.resumenSugerido && (
+        <p className="mt-1.5 text-xs text-text-muted">
+          Comparación automática con la última semana cerrada — revisala y editala antes de confirmar.
+        </p>
+      )}
       <div className="mt-2 flex gap-2">
-        <Input
+        <textarea
           value={resultadoTexto}
           onChange={(e) => setResultadoTexto(e.target.value)}
           placeholder="¿Qué resultó?"
-          className="flex-1"
+          rows={decision.resumenSugerido ? 3 : 1}
+          className="flex-1 px-3 py-2 rounded-lg border border-border bg-surface text-text-primary text-sm
+                     placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
         />
         <Button
           size="sm"

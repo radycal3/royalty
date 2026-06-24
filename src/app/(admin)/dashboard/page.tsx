@@ -1,6 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState, useTransition } from 'react';
+import Link from 'next/link';
+import { contarDecisionesEvaluablesTrasCierre } from '../laboratorio/actions';
 import {
   buildRangoSemana,
   buildRangoMes,
@@ -1929,6 +1931,9 @@ export default function DashboardPage() {
   const [modalCierreAbierto, setModalCierreAbierto] = useState(false);
   const [validacionCierre, setValidacionCierre] = useState<ValidacionCierre | null>(null);
   const [validandoCierre, setValidandoCierre] = useState(false);
+  // Aviso opcional post-cierre — no forma parte de la lógica de cierre,
+  // es un paso adicional que se puede ignorar sin consecuencias.
+  const [decisionesLabPendientes, setDecisionesLabPendientes] = useState(0);
   const [confirmandoCierre, setConfirmandoCierre] = useState(false);
 
   // ── Evolución ────────────────────────────────────────────────────────
@@ -2157,6 +2162,15 @@ export default function DashboardPage() {
         setPeriodoCerradoActual(periodo);
         loadEvolucion();
         loadAuditoria(kpis);
+
+        // Paso adicional opcional, no bloqueante — si falla, no afecta el
+        // cierre que ya se confirmó arriba.
+        try {
+          const n = await contarDecisionesEvaluablesTrasCierre(rango.desde);
+          setDecisionesLabPendientes(n);
+        } catch {
+          setDecisionesLabPendientes(0);
+        }
       }
     } catch (err) {
       showToast(err instanceof Error ? err.message : 'Error al cerrar el período', 'error');
@@ -2180,6 +2194,28 @@ export default function DashboardPage() {
           </div>
         </div>
       </div>
+
+      {/* ── Aviso post-cierre: decisiones del Laboratorio listas para evaluar ── */}
+      {decisionesLabPendientes > 0 && (
+        <div data-print="hidden" className="flex items-center justify-between gap-3 rounded-lg border border-border bg-brand-light px-4 py-3 text-sm">
+          <span className="text-text-primary">
+            Semana cerrada. Hay {decisionesLabPendientes} decisión{decisionesLabPendientes !== 1 ? 'es' : ''} del Laboratorio
+            lista{decisionesLabPendientes !== 1 ? 's' : ''} para evaluar con estos resultados.
+          </span>
+          <div className="flex items-center gap-3 shrink-0">
+            <Link href="/laboratorio" className="font-medium text-text-primary underline underline-offset-2 hover:no-underline">
+              Ir a Laboratorio →
+            </Link>
+            <button
+              onClick={() => setDecisionesLabPendientes(0)}
+              className="text-text-muted hover:text-text-primary"
+              title="Descartar"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+      )}
 
       {/* ── Header + selector de rango ──────────────────────────────── */}
       <div className="space-y-4" data-print="hidden">

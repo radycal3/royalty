@@ -6,7 +6,8 @@ import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { calcularKpis, obtenerSaludClientes } from '../dashboard/actions';
 import { obtenerAnalisisMerma } from '../stock/actions';
-import { obtenerMetricasHistorico } from '../equipo/actions';
+import { obtenerMetricasHistorico, obtenerMetricasPeriodo } from '../equipo/actions';
+import { formatARS } from '@/lib/utils/format';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -24,6 +25,11 @@ export type DecisionLaboratorio = {
   resultado: string | null;
   fechaResultado: string | null;
   estado: EstadoDecision;
+  // Pre-cargado solo por obtenerDecisionesPendientesDeResultado() — texto
+  // generado por código (no por IA) comparando la semana de la decisión
+  // contra la semana más recientemente cerrada. null si todavía no pasó
+  // una semana cerrada desde la decisión (nada que comparar aún).
+  resumenSugerido: string | null;
 };
 
 function mapDecision(d: any): DecisionLaboratorio {
@@ -39,6 +45,7 @@ function mapDecision(d: any): DecisionLaboratorio {
     resultado: d.resultado,
     fechaResultado: d.fecha_resultado,
     estado: d.estado,
+    resumenSugerido: null,
   };
 }
 
@@ -56,7 +63,9 @@ export async function obtenerDecisionesPeriodo(desde: string): Promise<DecisionL
     .order('created_at', { ascending: true });
 
   if (error) throw new Error(`Error al obtener decisiones: ${error.message}`);
-  return (data || []).map(mapDecision);
+  const decisiones = (data || []).map(mapDecision);
+  await aplicarResumenSugerido(supabase, decisiones);
+  return decisiones;
 }
 
 // Decisiones ya tomadas en cualquier período, esperando que se registre el
@@ -74,7 +83,220 @@ export async function obtenerDecisionesPendientesDeResultado(): Promise<Decision
     .order('fecha_decision', { ascending: true });
 
   if (error) throw new Error(`Error al obtener pendientes: ${error.message}`);
-  return (data || []).map(mapDecision);
+  const pendientes = (data || []).map(mapDecision);
+  await aplicarResumenSugerido(supabase, pendientes);
+  return pendientes;
+}
+
+// Cantidad de decisiones que se volvieron evaluables (resumenSugerido
+// no nulo) gracias al cierre de `desdeRecienCerrado` — para el banner
+// post-cierre en el dashboard. No toca nada del flujo de cierre en sí.
+export async function contarDecisionesEvaluablesTrasCierre(desdeRecienCerrado: string): Promise<number> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data, error } = await supabase
+    .from('decisiones_laboratorio')
+    .select('*')
+    .eq('estado', 'decidida');
+
+  if (error) throw new Error(`Error al obtener pendientes: ${error.message}`);
+  const pendientes = (data || []).map(mapDecision);
+  await aplicarResumenSugerido(supabase, pendientes, desdeRecienCerrado);
+  return pendientes.filter((d) => d.resumenSugerido).length;
+}
+
+// Calcula y aplica (mutando in-place) el resumenSugerido de cada decisión
+// con estado 'decidida' sin resultado, comparando la semana en que se
+// decidió contra la semana más recientemente cerrada (o una semana
+// específica, si se pasa `hastaDesde` — usado por el banner post-cierre
+// para preguntar puntualmente "¿esto se volvió evaluable con ESTE cierre?").
+async function aplicarResumenSugerido(
+  supabase: any,
+  decisiones: DecisionLaboratorio[],
+  hastaDesde?: string
+): Promise<void> {
+  const pendientes = decisiones.filter((d) => d.estado === 'decidida' && d.fechaDecision);
+  if (pendientes.length === 0) return;
+
+  const query = supabase
+    .from('periodos')
+    .select('desde, hasta, ventas, margen_neto, beneficio_neto, resultado_delivery, publicidad_pct')
+    .eq('tipo', 'semana');
+
+  const { data: ultimoCerrado } = hastaDesde
+    ? await query.eq('desde', hastaDesde).maybeSingle()
+    : await query.order('desde', { ascending: false }).limit(1).maybeSingle();
+
+  // Nunca se cerró ninguna semana todavía (o la semana pedida no está
+  // cerrada) — no hay "después" con qué comparar.
+  if (!ultimoCerrado) return;
+
+  const despues: KpisComparables = {
+    ventas: ultimoCerrado.ventas,
+    margenNeto: ultimoCerrado.margen_neto,
+    beneficioNeto: ultimoCerrado.beneficio_neto,
+    resultadoDelivery: ultimoCerrado.resultado_delivery,
+    publicidadPct: ultimoCerrado.publicidad_pct,
+  };
+  const metricasDespues = await obtenerMetricasPeriodo(ultimoCerrado.desde);
+  const mermaDespues = await obtenerMermaTotalOpcional(ultimoCerrado.desde, ultimoCerrado.hasta);
+
+  for (const d of pendientes) {
+    const viernesDecision = viernesDe(d.fechaDecision!);
+
+    // Decidido en la misma semana que se acaba de cerrar: todavía no pasó
+    // tiempo para ver el efecto. No se inventa una comparación de la
+    // semana contra sí misma.
+    if (viernesDecision === ultimoCerrado.desde) continue;
+
+    const domingoDecision = domingoDe(viernesDecision);
+    const antes = await obtenerKpisSemana(supabase, viernesDecision, domingoDecision);
+    const metricasAntes = await obtenerMetricasPeriodo(viernesDecision);
+    const mermaAntes = await obtenerMermaTotalOpcional(viernesDecision, domingoDecision);
+
+    d.resumenSugerido = construirResumen(d.area, antes, despues, metricasAntes, metricasDespues, mermaAntes, mermaDespues);
+  }
+}
+
+// ─── Comparación automática "antes vs después" ─────────────────────────────
+// Texto generado por código (sin IA): rápido, gratis y basado únicamente en
+// números reales — la interpretación queda en manos de Lucas al confirmar.
+
+type KpisComparables = {
+  ventas: number;
+  margenNeto: number;
+  beneficioNeto: number;
+  resultadoDelivery: number;
+  publicidadPct: number;
+};
+
+function periodoDeJS(fecha: Date): Date {
+  const day = fecha.getDay();
+  const isodow = day === 0 ? 7 : day;
+  const offset = (isodow - 5 + 7) % 7;
+  const viernes = new Date(fecha);
+  viernes.setDate(fecha.getDate() - offset);
+  return viernes;
+}
+
+function formatFechaLocal(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function viernesDe(fechaStr: string): string {
+  return formatFechaLocal(periodoDeJS(new Date(fechaStr + 'T12:00:00')));
+}
+
+function domingoDe(viernesStr: string): string {
+  const d = new Date(viernesStr + 'T12:00:00');
+  d.setDate(d.getDate() + 2);
+  return formatFechaLocal(d);
+}
+
+// Prefiere el snapshot congelado de periodos; si esa semana todavía no se
+// cerró, calcula en vivo con calcularKpis (mismo dato, solo que no frozen).
+async function obtenerKpisSemana(supabase: any, desde: string, hasta: string): Promise<KpisComparables> {
+  const { data: row } = await supabase
+    .from('periodos')
+    .select('ventas, margen_neto, beneficio_neto, resultado_delivery, publicidad_pct')
+    .eq('tipo', 'semana')
+    .eq('desde', desde)
+    .eq('hasta', hasta)
+    .maybeSingle();
+
+  if (row) {
+    return {
+      ventas: row.ventas,
+      margenNeto: row.margen_neto,
+      beneficioNeto: row.beneficio_neto,
+      resultadoDelivery: row.resultado_delivery,
+      publicidadPct: row.publicidad_pct,
+    };
+  }
+
+  const kpis = await calcularKpis(supabase, desde, hasta);
+  return {
+    ventas: kpis.ventas,
+    margenNeto: kpis.margenNeto,
+    beneficioNeto: kpis.beneficioNeto,
+    resultadoDelivery: kpis.resultadoDelivery,
+    publicidadPct: kpis.publicidadPct,
+  };
+}
+
+async function obtenerMermaTotalOpcional(desde: string, hasta: string): Promise<number | null> {
+  try {
+    const analisis = await obtenerAnalisisMerma(desde, hasta);
+    const completos = analisis.ingredientes.filter((i) => i.datosCompletos);
+    if (completos.length === 0) return null;
+    return analisis.mermaPesosTotal;
+  } catch {
+    return null;
+  }
+}
+
+function pp(delta: number): string {
+  return `${delta >= 0 ? '+' : ''}${delta.toFixed(1)} pp`;
+}
+
+function construirResumen(
+  area: string,
+  antes: KpisComparables,
+  despues: KpisComparables,
+  metricasAntes: Awaited<ReturnType<typeof obtenerMetricasPeriodo>>,
+  metricasDespues: Awaited<ReturnType<typeof obtenerMetricasPeriodo>>,
+  mermaAntes: number | null,
+  mermaDespues: number | null
+): string {
+  const partes: string[] = [];
+
+  partes.push(
+    `Margen neto: ${antes.margenNeto.toFixed(1)}% → ${despues.margenNeto.toFixed(1)}% (${pp(despues.margenNeto - antes.margenNeto)}).`
+  );
+  partes.push(`Ventas: ${formatARS(antes.ventas)} → ${formatARS(despues.ventas)}.`);
+
+  const areaLower = area.toLowerCase();
+
+  if (areaLower.includes('deliver')) {
+    partes.push(`Resultado Delivery: ${formatARS(antes.resultadoDelivery)} → ${formatARS(despues.resultadoDelivery)}.`);
+  }
+
+  if (areaLower.includes('public') || areaLower.includes('costo')) {
+    partes.push(
+      `Publicidad: ${antes.publicidadPct.toFixed(1)}% de ventas → ${despues.publicidadPct.toFixed(1)}% (${pp(despues.publicidadPct - antes.publicidadPct)}).`
+    );
+  }
+
+  if (areaLower.includes('equipo') || areaLower.includes('queja') || areaLower.includes('mensaje')) {
+    if (
+      metricasAntes?.mensajesRecibidos &&
+      metricasDespues?.mensajesRecibidos &&
+      metricasAntes.mensajesConvertidos != null &&
+      metricasDespues.mensajesConvertidos != null
+    ) {
+      const tasaAntes = (metricasAntes.mensajesConvertidos / metricasAntes.mensajesRecibidos) * 100;
+      const tasaDespues = (metricasDespues.mensajesConvertidos / metricasDespues.mensajesRecibidos) * 100;
+      partes.push(`Conversión de mensajes: ${tasaAntes.toFixed(0)}% → ${tasaDespues.toFixed(0)}%.`);
+    }
+    if (metricasAntes && metricasDespues) {
+      const quejasAntes = (metricasAntes.quejasFaltantes ?? 0) + (metricasAntes.quejasCalidad ?? 0);
+      const quejasDespues = (metricasDespues.quejasFaltantes ?? 0) + (metricasDespues.quejasCalidad ?? 0);
+      if (metricasAntes.quejasFaltantes != null || metricasAntes.quejasCalidad != null) {
+        partes.push(`Quejas: ${quejasAntes} → ${quejasDespues}.`);
+      }
+    }
+  }
+
+  if ((areaLower.includes('merma') || areaLower.includes('stock')) && mermaAntes != null && mermaDespues != null) {
+    partes.push(`Merma total: ${formatARS(mermaAntes)} → ${formatARS(mermaDespues)}.`);
+  }
+
+  return partes.join(' ');
 }
 
 // ─── Registrar decisión / resultado ─────────────────────────────────────────
