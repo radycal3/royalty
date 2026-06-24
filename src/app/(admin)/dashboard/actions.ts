@@ -467,12 +467,23 @@ export type TendenciaVentana = {
 };
 
 export type ClienteValioso = {
+  clienteId?: string;          // presente en altoValorDetalle y nuevosEnRiesgoDetalle
   nombre: string;
   celular: string;             // formato +54XXXXXXXXXX
   totalPedidos: number;
   ventasTotales: number;
   ultimoPedido: string;        // fecha ISO
-  diasSinComprar?: number;     // solo en alto valor en riesgo
+  diasSinComprar?: number;     // solo en alto valor en riesgo / nuevos en riesgo
+};
+
+export type MetodoContacto = 'llamada' | 'whatsapp' | 'otro';
+
+export type ClienteContacto = {
+  id: string;
+  fecha: string;
+  metodo: MetodoContacto;
+  nota: string | null;
+  volvioAComprar: boolean;
 };
 
 export type SaludClientes = {
@@ -490,6 +501,9 @@ export type SaludClientes = {
   altoValorEnRiesgo: number;
   altoValorVentasHistoricas: number;
   altoValorDetalle: ClienteValioso[];  // lista accionable con teléfono
+
+  // Clientes que cruzaron a "en riesgo" en los últimos 7 días (todos, no solo alto valor)
+  nuevosEnRiesgoDetalle: ClienteValioso[];
 
   // Valor económico de clientes en riesgo
   enRiesgoVentasHistoricas: number;
@@ -543,6 +557,7 @@ export async function obtenerSaludClientes(): Promise<SaludClientes> {
 
   function mapCliente(t: Record<string, unknown>): ClienteValioso {
     return {
+      clienteId:      t.cliente_id !== undefined ? String(t.cliente_id) : undefined,
       nombre:         String(t.nombre ?? ''),
       celular:        String(t.celular ?? ''),
       totalPedidos:   Number(t.total_pedidos),
@@ -565,6 +580,7 @@ export async function obtenerSaludClientes(): Promise<SaludClientes> {
     altoValorEnRiesgo:           Number(r.alto_valor_en_riesgo),
     altoValorVentasHistoricas:   Number(r.alto_valor_ventas_historicas),
     altoValorDetalle:            (r.alto_valor_detalle as Array<Record<string, unknown>> ?? []).map(mapCliente),
+    nuevosEnRiesgoDetalle:       (r.nuevos_en_riesgo_detalle as Array<Record<string, unknown>> ?? []).map(mapCliente),
 
     enRiesgoVentasHistoricas:  Number(r.en_riesgo_ventas_historicas),
     enRiesgoPedidosTotales:    Number(r.en_riesgo_pedidos_totales),
@@ -603,4 +619,68 @@ export async function obtenerSaludClientes(): Promise<SaludClientes> {
 
     topRepetidores: (r.top_repetidores as Array<Record<string, unknown>> ?? []).map(mapCliente),
   };
+}
+
+// ─── Registro de contacto con clientes ─────────────────────────────────────
+// "¿Volvió a comprar?" se calcula comparando la fecha de contacto contra
+// pedidos.fecha (solo importaciones activas) — nunca se guarda como campo
+// manual, para no depender de que alguien lo actualice (principio: no
+// inventar causalidad, derivar de datos reales).
+
+export async function obtenerContactosCliente(clienteId: string): Promise<ClienteContacto[]> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data: contactos, error } = await supabase
+    .from('clientes_contactos')
+    .select('id, fecha, metodo, nota')
+    .eq('cliente_id', clienteId)
+    .order('fecha', { ascending: false });
+
+  if (error) throw new Error(`Error al obtener contactos: ${error.message}`);
+  if (!contactos || contactos.length === 0) return [];
+
+  const [{ data: pedidos }, { data: importaciones }] = await Promise.all([
+    supabase.from('pedidos').select('fecha, importacion_id').eq('cliente_id', clienteId),
+    supabase.from('importaciones').select('id').eq('estado', 'activa'),
+  ]);
+
+  const activas = new Set((importaciones || []).map((i: any) => i.id));
+  const fechasPedidosActivos = (pedidos || [])
+    .filter((p: any) => activas.has(p.importacion_id))
+    .map((p: any) => p.fecha as string);
+
+  return contactos.map((c: any) => ({
+    id: c.id,
+    fecha: c.fecha,
+    metodo: c.metodo as MetodoContacto,
+    nota: c.nota,
+    volvioAComprar: fechasPedidosActivos.some((f) => f > c.fecha),
+  }));
+}
+
+export async function registrarContacto(input: {
+  clienteId: string;
+  fecha: string;
+  metodo: MetodoContacto;
+  nota: string | null;
+}) {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  if (!input.clienteId) return { error: 'Falta el cliente' };
+  if (!input.fecha) return { error: 'Falta la fecha' };
+
+  const { error } = await supabase.from('clientes_contactos').insert({
+    cliente_id: input.clienteId,
+    fecha: input.fecha,
+    metodo: input.metodo,
+    nota: input.nota,
+    registrado_por: user.user.id,
+  });
+
+  if (error) return { error: error.message };
+  return { success: true };
 }

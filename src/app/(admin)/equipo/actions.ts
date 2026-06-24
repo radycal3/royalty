@@ -104,3 +104,100 @@ export async function toggleActivoMiembro(id: string, activo: boolean) {
   if (error) return { error: error.message };
   return { success: true };
 }
+
+// ─── Métricas semanales del equipo ──────────────────────────────────────────
+// Carga manual del admin. Sin ningún campo en pesos.
+
+export type MetricasEquipoSemana = {
+  periodoDesde: string;
+  periodoHasta: string;
+  mensajesRecibidos: number | null;
+  mensajesConvertidos: number | null;
+  tiempoPromedioProduccionMin: number | null;
+  quejasFaltantes: number | null;
+  quejasCalidad: number | null;
+};
+
+export async function obtenerMetricasPeriodo(periodoDesde: string): Promise<MetricasEquipoSemana | null> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data, error } = await supabase
+    .from('metricas_equipo_semana')
+    .select('*')
+    .eq('periodo_desde', periodoDesde)
+    .maybeSingle();
+
+  if (error) throw new Error(`Error al obtener métricas: ${error.message}`);
+  if (!data) return null;
+
+  return {
+    periodoDesde: data.periodo_desde,
+    periodoHasta: data.periodo_hasta,
+    mensajesRecibidos: data.mensajes_recibidos,
+    mensajesConvertidos: data.mensajes_convertidos,
+    tiempoPromedioProduccionMin: data.tiempo_promedio_produccion_min,
+    quejasFaltantes: data.quejas_faltantes,
+    quejasCalidad: data.quejas_calidad,
+  };
+}
+
+export async function guardarMetricasPeriodo(input: {
+  periodoDesde: string;
+  periodoHasta: string;
+  mensajesRecibidos: number | null;
+  mensajesConvertidos: number | null;
+  tiempoPromedioProduccionMin: number | null;
+  quejasFaltantes: number | null;
+  quejasCalidad: number | null;
+}) {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { error } = await supabase
+    .from('metricas_equipo_semana')
+    .upsert(
+      {
+        periodo_desde: input.periodoDesde,
+        periodo_hasta: input.periodoHasta,
+        mensajes_recibidos: input.mensajesRecibidos,
+        mensajes_convertidos: input.mensajesConvertidos,
+        tiempo_promedio_produccion_min: input.tiempoPromedioProduccionMin,
+        quejas_faltantes: input.quejasFaltantes,
+        quejas_calidad: input.quejasCalidad,
+        registrado_por: user.user.id,
+      },
+      { onConflict: 'periodo_desde' }
+    );
+
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function obtenerMetricasHistorico(n: number = 8): Promise<MetricasEquipoSemana[]> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data, error } = await supabase
+    .from('metricas_equipo_semana')
+    .select('*')
+    .order('periodo_desde', { ascending: false })
+    .limit(n);
+
+  if (error) throw new Error(`Error al obtener histórico: ${error.message}`);
+
+  return (data || [])
+    .map((d: any) => ({
+      periodoDesde: d.periodo_desde,
+      periodoHasta: d.periodo_hasta,
+      mensajesRecibidos: d.mensajes_recibidos,
+      mensajesConvertidos: d.mensajes_convertidos,
+      tiempoPromedioProduccionMin: d.tiempo_promedio_produccion_min,
+      quejasFaltantes: d.quejas_faltantes,
+      quejasCalidad: d.quejas_calidad,
+    }))
+    .reverse();
+}

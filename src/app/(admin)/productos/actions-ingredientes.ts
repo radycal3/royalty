@@ -69,11 +69,12 @@ export async function crearIngrediente(formData: FormData) {
   const unidad_receta = formData.get('unidad_receta') as string
   const factor_conversion = Number(formData.get('factor_conversion'))
   const controlado_stock = checkboxValue(formData, 'controlado_stock')
+  const conteo_en_unidad_receta = checkboxValue(formData, 'conteo_en_unidad_receta')
   const costo_inicial = Number(formData.get('costo_inicial'))
 
   const { data: ingrediente, error } = await supabase
     .from('ingredientes')
-    .insert({ nombre, unidad_compra, unidad_receta, factor_conversion, controlado_stock })
+    .insert({ nombre, unidad_compra, unidad_receta, factor_conversion, controlado_stock, conteo_en_unidad_receta })
     .select()
     .single()
 
@@ -98,11 +99,12 @@ export async function actualizarIngrediente(id: string, formData: FormData) {
   const unidad_receta = formData.get('unidad_receta') as string
   const factor_conversion = Number(formData.get('factor_conversion'))
   const controlado_stock = checkboxValue(formData, 'controlado_stock')
+  const conteo_en_unidad_receta = checkboxValue(formData, 'conteo_en_unidad_receta')
   const activo = checkboxValue(formData, 'activo')
 
   const { error } = await supabase
     .from('ingredientes')
-    .update({ nombre, unidad_compra, unidad_receta, factor_conversion, controlado_stock, activo })
+    .update({ nombre, unidad_compra, unidad_receta, factor_conversion, controlado_stock, conteo_en_unidad_receta, activo })
     .eq('id', id)
 
   if (error) return { error: error.message }

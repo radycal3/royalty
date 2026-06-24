@@ -49,6 +49,7 @@ export default function StockPage() {
   const [tab, setTab] = useState('merma');
   const [showNewCompra, setShowNewCompra] = useState(false);
   const [showConteoInicio, setShowConteoInicio] = useState(false);
+  const [showConteoCierre, setShowConteoCierre] = useState(false);
   const [pending, startTransition] = useTransition();
   const { show, Toast } = useToast();
   const requestId = useRef(0);
@@ -120,10 +121,16 @@ export default function StockPage() {
           </Button>
         )}
         {tab === 'merma' && (
-          <Button variant="secondary" onClick={() => setShowConteoInicio(true)}>
-            <ClipboardList className="w-4 h-4 mr-2" />
-            Conteo inicio de semana
-          </Button>
+          <div className="flex gap-2">
+            <Button variant="secondary" onClick={() => setShowConteoInicio(true)}>
+              <ClipboardList className="w-4 h-4 mr-2" />
+              Conteo inicio de semana
+            </Button>
+            <Button variant="secondary" onClick={() => setShowConteoCierre(true)}>
+              <ClipboardList className="w-4 h-4 mr-2" />
+              Conteo de cierre
+            </Button>
+          </div>
         )}
       </div>
 
@@ -175,6 +182,10 @@ export default function StockPage() {
             onGuardado={() => loadDatos(periodo.viernes, periodo.fechaHasta)}
           />
         )}
+      </SidePanel>
+
+      <SidePanel open={showConteoCierre} onClose={() => setShowConteoCierre(false)} title="Conteo de cierre">
+        {periodo && <ConteoCierreAdmin periodo={periodo} ingredientes={ingredientes} onGuardado={() => loadDatos(periodo.viernes, periodo.fechaHasta)} />}
       </SidePanel>
 
       <Toast />
@@ -411,5 +422,56 @@ function FormCompra({
 
       <Button type="submit" disabled={pending}>Registrar compra</Button>
     </form>
+  );
+}
+
+// ─── Conteo de cierre (admin) ───────────────────────────────────────────────
+// El conteo de empleados (/panel/stock) siempre es "esta noche". Acá el
+// admin puede elegir cuál de las 3 noches del período está cerrando —
+// útil si todavía no hay cuentas de empleado cargando el cierre solas.
+
+function ConteoCierreAdmin({
+  periodo,
+  ingredientes,
+  onGuardado,
+}: {
+  periodo: PeriodoInfo;
+  ingredientes: IngredienteStock[];
+  onGuardado: () => void;
+}) {
+  const domingo = periodo.fechaHasta;
+  const viernes = periodo.viernes;
+  const sabado = (() => {
+    const d = new Date(viernes + 'T12:00:00');
+    d.setDate(d.getDate() + 1);
+    return d.toISOString().split('T')[0];
+  })();
+
+  const [fecha, setFecha] = useState(domingo);
+
+  const opciones = [
+    { value: viernes, label: `Viernes ${formatDate(viernes)}` },
+    { value: sabado, label: `Sábado ${formatDate(sabado)}` },
+    { value: domingo, label: `Domingo ${formatDate(domingo)}` },
+  ];
+
+  return (
+    <div className="space-y-4">
+      <Field label="Noche que estás cerrando" hint="El cálculo de merma usa el cierre del domingo como stock final de la semana.">
+        <Select value={fecha} onChange={(e) => setFecha(e.target.value)}>
+          {opciones.map((o) => (
+            <option key={o.value} value={o.value}>{o.label}</option>
+          ))}
+        </Select>
+      </Field>
+      <ConteoForm
+        key={fecha}
+        ingredientes={ingredientes}
+        fecha={fecha}
+        tipo="fin_noche"
+        titulo="Stock al cerrar"
+        onGuardado={onGuardado}
+      />
+    </div>
   );
 }

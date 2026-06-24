@@ -18,12 +18,16 @@ import {
   obtenerRankingProductos,
   obtenerConsumoIngredientes,
   obtenerSaludClientes,
+  obtenerContactosCliente,
+  registrarContacto,
   type KpisConDelta,
   type GastoDesglose,
   type ProductoRanking,
   type IngredienteConsumo,
   type SaludClientes,
   type ClienteValioso,
+  type ClienteContacto,
+  type MetodoContacto,
 } from './actions';
 import {
   validarCierre,
@@ -44,8 +48,8 @@ import {
   type EstadoSalud,
   type ComparacionPeriodos,
 } from '../auditoria/actions';
-import { formatARS, formatPercent } from '@/lib/utils/format';
-import { EmptyState, useToast } from '@/components/ui';
+import { formatARS, formatPercent, formatDate } from '@/lib/utils/format';
+import { EmptyState, useToast, SidePanel, Field, Input, Select, Button, Badge } from '@/components/ui';
 
 // ─── Constantes ──────────────────────────────────────────────────────────
 
@@ -1082,10 +1086,12 @@ function ModalAltoValor({
   clientes,
   ventanaDias,
   onClose,
+  onContactar,
 }: {
   clientes: ClienteValioso[];
   ventanaDias: number;
   onClose: () => void;
+  onContactar: (c: ClienteValioso) => void;
 }) {
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -1138,6 +1144,86 @@ function ModalAltoValor({
                     </span>
                   </td>
                   <td className="py-2.5 text-center">
+                    <div className="flex items-center justify-center gap-1.5">
+                      {c.celular ? (
+                        <a
+                          href={waLink(c.celular)}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+                        >
+                          WhatsApp
+                        </a>
+                      ) : (
+                        <span className="text-xs text-text-muted">Sin teléfono</span>
+                      )}
+                      {c.clienteId && (
+                        <button
+                          onClick={() => onContactar(c)}
+                          className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+                        >
+                          Registrar
+                        </button>
+                      )}
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Sección: entraron en riesgo esta semana ───────────────────────────────
+
+function SeccionNuevosEnRiesgo({
+  clientes,
+  ventanaDias,
+  onContactar,
+}: {
+  clientes: ClienteValioso[];
+  ventanaDias: number;
+  onContactar: (c: ClienteValioso) => void;
+}) {
+  if (clientes.length === 0) {
+    return (
+      <div className="rounded-lg border border-border bg-surface p-4 text-sm text-text-muted">
+        Nadie cruzó a &quot;en riesgo&quot; en los últimos 7 días.
+      </div>
+    );
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-surface p-4">
+      <div className="mb-3">
+        <h3 className="text-sm font-semibold text-text-primary">Entraron en riesgo esta semana</h3>
+        <p className="mt-0.5 text-xs text-text-muted">
+          Cruzaron los {ventanaDias} días sin comprar en los últimos 7 días — todavía frescos para contactar.
+        </p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-sm">
+          <thead>
+            <tr className="border-b border-border text-left text-xs text-text-muted">
+              <th className="pb-2 font-medium">Nombre</th>
+              <th className="pb-2 text-right font-medium">Pedidos</th>
+              <th className="pb-2 text-right font-medium">Sin comprar</th>
+              <th className="pb-2 text-center font-medium">Contacto</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-border/50">
+            {clientes.map((c, i) => (
+              <tr key={i}>
+                <td className="py-2.5 text-text-primary">{c.nombre || '—'}</td>
+                <td className="py-2.5 text-right tabular-nums text-text-secondary">{c.totalPedidos}</td>
+                <td className="py-2.5 text-right tabular-nums font-medium text-warning">
+                  {c.diasSinComprar ?? '—'} días
+                </td>
+                <td className="py-2.5 text-center">
+                  <div className="flex items-center justify-center gap-1.5">
                     {c.celular ? (
                       <a
                         href={waLink(c.celular)}
@@ -1150,14 +1236,123 @@ function ModalAltoValor({
                     ) : (
                       <span className="text-xs text-text-muted">Sin teléfono</span>
                     )}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+                    {c.clienteId && (
+                      <button
+                        onClick={() => onContactar(c)}
+                        className="inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary"
+                      >
+                        Registrar
+                      </button>
+                    )}
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
       </div>
     </div>
+  );
+}
+
+// ─── Panel: historial de contacto + registrar nuevo ────────────────────────
+
+const METODOS_CONTACTO: { value: MetodoContacto; label: string }[] = [
+  { value: 'whatsapp', label: 'WhatsApp' },
+  { value: 'llamada', label: 'Llamada' },
+  { value: 'otro', label: 'Otro' },
+];
+
+function PanelContactoCliente({
+  cliente,
+  onClose,
+}: {
+  cliente: { id: string; nombre: string } | null;
+  onClose: () => void;
+}) {
+  const [contactos, setContactos] = useState<ClienteContacto[]>([]);
+  const [loaded, setLoaded] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const { show, Toast } = useToast();
+
+  useEffect(() => {
+    if (!cliente) return;
+    setLoaded(false);
+    obtenerContactosCliente(cliente.id).then((data) => {
+      setContactos(data);
+      setLoaded(true);
+    });
+  }, [cliente]);
+
+  if (!cliente) return null;
+
+  function handleGuardar(fd: FormData) {
+    startTransition(async () => {
+      const r = await registrarContacto({
+        clienteId: cliente!.id,
+        fecha: fd.get('fecha') as string,
+        metodo: fd.get('metodo') as MetodoContacto,
+        nota: (fd.get('nota') as string)?.trim() || null,
+      });
+      if (r.error) { show(r.error, 'error'); return; }
+      show('Contacto registrado');
+      const data = await obtenerContactosCliente(cliente!.id);
+      setContactos(data);
+    });
+  }
+
+  return (
+    <SidePanel open={!!cliente} onClose={onClose} title={`Contacto — ${cliente.nombre || 'Cliente'}`}>
+      <div className="space-y-6">
+        <form action={handleGuardar} className="space-y-3">
+          <Field label="Fecha">
+            <Input name="fecha" type="date" required defaultValue={new Date().toISOString().split('T')[0]} />
+          </Field>
+          <Field label="Medio">
+            <Select name="metodo" defaultValue="whatsapp">
+              {METODOS_CONTACTO.map((m) => (
+                <option key={m.value} value={m.value}>{m.label}</option>
+              ))}
+            </Select>
+          </Field>
+          <Field label="Nota (opcional)">
+            <Input name="nota" placeholder="Ej: le ofrecí 2x1 en hamburguesas" />
+          </Field>
+          <Button type="submit" disabled={pending} className="w-full">
+            Registrar contacto
+          </Button>
+        </form>
+
+        <div>
+          <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
+            Historial
+          </h4>
+          {!loaded ? (
+            <p className="text-sm text-text-muted">Cargando...</p>
+          ) : contactos.length === 0 ? (
+            <p className="text-sm text-text-muted">Todavía no se registró ningún contacto.</p>
+          ) : (
+            <div className="space-y-2">
+              {contactos.map((c) => (
+                <div key={c.id} className="rounded-lg border border-border p-3 text-sm">
+                  <div className="flex items-center justify-between">
+                    <span className="font-medium text-text-primary">{formatDate(c.fecha)}</span>
+                    <div className="flex items-center gap-2">
+                      <Badge color="gray">{METODOS_CONTACTO.find((m) => m.value === c.metodo)?.label ?? c.metodo}</Badge>
+                      <Badge color={c.volvioAComprar ? 'green' : 'yellow'}>
+                        {c.volvioAComprar ? 'Volvió a comprar' : 'Sin compra todavía'}
+                      </Badge>
+                    </div>
+                  </div>
+                  {c.nota && <p className="mt-1 text-text-secondary">{c.nota}</p>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <Toast />
+    </SidePanel>
   );
 }
 
@@ -1169,6 +1364,12 @@ function TabSaludClientes({
   loading: boolean;
 }) {
   const [modalAltoValorAbierto, setModalAltoValorAbierto] = useState(false);
+  const [contactoCliente, setContactoCliente] = useState<{ id: string; nombre: string } | null>(null);
+
+  function handleContactar(c: ClienteValioso) {
+    if (!c.clienteId) return;
+    setContactoCliente({ id: c.clienteId, nombre: c.nombre });
+  }
 
   if (loading) {
     return <div className="py-12 text-center text-sm text-text-muted">Cargando salud de clientes…</div>;
@@ -1235,6 +1436,13 @@ function TabSaludClientes({
           </div>
         </div>
       </div>
+
+      {/* ── Entraron en riesgo esta semana ──────────────────────────────── */}
+      <SeccionNuevosEnRiesgo
+        clientes={salud.nuevosEnRiesgoDetalle}
+        ventanaDias={salud.ventanaDias}
+        onContactar={handleContactar}
+      />
 
       {/* Aviso de historial corto */}
       {historialCorto && (
@@ -1468,8 +1676,11 @@ function TabSaludClientes({
           clientes={salud.altoValorDetalle}
           ventanaDias={salud.ventanaDias}
           onClose={() => setModalAltoValorAbierto(false)}
+          onContactar={handleContactar}
         />
       )}
+
+      <PanelContactoCliente cliente={contactoCliente} onClose={() => setContactoCliente(null)} />
 
     </div>
   );

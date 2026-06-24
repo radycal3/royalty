@@ -17,15 +17,21 @@ import {
   Button,
   Badge,
   EmptyState,
+  Tabs,
   useToast,
 } from '@/components/ui';
-import type { Rol, Miembro } from './actions';
+import type { Rol, Miembro, MetricasEquipoSemana } from './actions';
 import {
   obtenerEquipo,
   crearMiembro,
   actualizarMiembro,
   toggleActivoMiembro,
+  obtenerMetricasPeriodo,
+  guardarMetricasPeriodo,
 } from './actions';
+import type { PeriodoInfo } from '../gastos/actions';
+import { obtenerPeriodoActual, obtenerPeriodoPorOffset } from '../gastos/actions';
+import { ChevronLeft, ChevronRight } from 'lucide-react';
 
 // ─── Constantes ────────────────────────────────────────────────────────────
 
@@ -49,6 +55,7 @@ const ROL_COLORS: Record<string, BadgeColor> = Object.fromEntries(
 // ─── Page ──────────────────────────────────────────────────────────────────
 
 export default function EquipoPage() {
+  const [tab, setTab] = useState('miembros');
   const [miembros, setMiembros] = useState<Miembro[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [filtro, setFiltro] = useState('');
@@ -144,12 +151,25 @@ export default function EquipoPage() {
             )}
           </p>
         </div>
-        <Button onClick={() => setShowNew(true)}>
-          <Plus className="w-4 h-4 mr-2" />
-          Nuevo miembro
-        </Button>
+        {tab === 'miembros' && (
+          <Button onClick={() => setShowNew(true)}>
+            <Plus className="w-4 h-4 mr-2" />
+            Nuevo miembro
+          </Button>
+        )}
       </div>
 
+      <Tabs
+        tabs={[{ key: 'miembros', label: 'Miembros' }, { key: 'metricas', label: 'Métricas semanales' }]}
+        activeTab={tab}
+        onChange={setTab}
+      />
+
+      <div className={tab === 'metricas' ? 'block' : 'hidden'}>
+        <TabMetricasEquipo />
+      </div>
+
+      <div className={tab === 'miembros' ? 'block space-y-6' : 'hidden'}>
       {/* Filtros */}
       <div className="flex items-center gap-3">
         <div className="relative flex-1">
@@ -264,6 +284,7 @@ export default function EquipoPage() {
           </table>
         </div>
       )}
+      </div>
 
       {/* SidePanel: Nuevo miembro */}
       <SidePanel open={showNew} onClose={() => setShowNew(false)} title="Nuevo miembro">
@@ -355,5 +376,115 @@ function FormMiembro({
         {isNew ? 'Agregar miembro' : 'Guardar cambios'}
       </Button>
     </form>
+  );
+}
+
+// ─── Tab: Métricas semanales ────────────────────────────────────────────────
+
+function TabMetricasEquipo() {
+  const [periodo, setPeriodo] = useState<PeriodoInfo | null>(null);
+  const [metricas, setMetricas] = useState<MetricasEquipoSemana | null>(null);
+  const [loaded, setLoaded] = useState(false);
+  const [pending, startTransition] = useTransition();
+  const { show, Toast } = useToast();
+
+  useEffect(() => {
+    (async () => {
+      const p = await obtenerPeriodoActual();
+      setPeriodo(p);
+      await loadMetricas(p.viernes);
+    })();
+  }, []);
+
+  async function loadMetricas(viernes: string) {
+    setLoaded(false);
+    const data = await obtenerMetricasPeriodo(viernes);
+    setMetricas(data);
+    setLoaded(true);
+  }
+
+  async function handleNav(offset: number) {
+    if (!periodo) return;
+    const nuevo = await obtenerPeriodoPorOffset(periodo.viernes, offset);
+    setPeriodo(nuevo);
+    await loadMetricas(nuevo.viernes);
+  }
+
+  function handleGuardar(fd: FormData) {
+    if (!periodo) return;
+    const num = (name: string) => {
+      const v = fd.get(name) as string;
+      return v === '' ? null : Number(v);
+    };
+    startTransition(async () => {
+      const r = await guardarMetricasPeriodo({
+        periodoDesde: periodo.viernes,
+        periodoHasta: periodo.fechaHasta,
+        mensajesRecibidos: num('mensajesRecibidos'),
+        mensajesConvertidos: num('mensajesConvertidos'),
+        tiempoPromedioProduccionMin: num('tiempoPromedioProduccionMin'),
+        quejasFaltantes: num('quejasFaltantes'),
+        quejasCalidad: num('quejasCalidad'),
+      });
+      if (r.error) { show(r.error, 'error'); return; }
+      show('Métricas guardadas');
+      await loadMetricas(periodo.viernes);
+    });
+  }
+
+  if (!periodo || !loaded) {
+    return <div className="text-text-muted text-sm py-8 text-center">Cargando...</div>;
+  }
+
+  const tasaConversion =
+    metricas?.mensajesRecibidos && metricas.mensajesRecibidos > 0 && metricas.mensajesConvertidos != null
+      ? ((metricas.mensajesConvertidos / metricas.mensajesRecibidos) * 100).toFixed(1)
+      : null;
+
+  return (
+    <div className="space-y-6">
+      <div className="flex items-center justify-center gap-4">
+        <button onClick={() => handleNav(-1)} className="p-2 rounded-lg hover:bg-surface-alt text-text-muted hover:text-text-primary transition-colors">
+          <ChevronLeft className="w-5 h-5" />
+        </button>
+        <div className="text-center">
+          <p className="text-text-primary font-semibold">{periodo.label}</p>
+          {periodo.esActual && <Badge color="green">Período actual</Badge>}
+        </div>
+        <button onClick={() => handleNav(1)} className="p-2 rounded-lg hover:bg-surface-alt text-text-muted hover:text-text-primary transition-colors">
+          <ChevronRight className="w-5 h-5" />
+        </button>
+      </div>
+
+      <form key={periodo.viernes} action={handleGuardar} className="bg-surface-alt rounded-lg border border-border p-5 space-y-4 max-w-md mx-auto">
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Mensajes recibidos">
+            <Input name="mensajesRecibidos" type="number" min="0" step="1" defaultValue={metricas?.mensajesRecibidos ?? ''} />
+          </Field>
+          <Field label="Mensajes convertidos en pedido">
+            <Input name="mensajesConvertidos" type="number" min="0" step="1" defaultValue={metricas?.mensajesConvertidos ?? ''} />
+          </Field>
+        </div>
+        {tasaConversion && (
+          <p className="text-xs text-text-muted">Tasa de conversión: <span className="font-medium text-text-primary">{tasaConversion}%</span></p>
+        )}
+        <Field label="Tiempo promedio de producción (minutos)">
+          <Input name="tiempoPromedioProduccionMin" type="number" min="0" step="0.5" defaultValue={metricas?.tiempoPromedioProduccionMin ?? ''} />
+        </Field>
+        <div className="grid grid-cols-2 gap-3">
+          <Field label="Quejas por faltantes">
+            <Input name="quejasFaltantes" type="number" min="0" step="1" defaultValue={metricas?.quejasFaltantes ?? ''} />
+          </Field>
+          <Field label="Quejas por calidad">
+            <Input name="quejasCalidad" type="number" min="0" step="1" defaultValue={metricas?.quejasCalidad ?? ''} />
+          </Field>
+        </div>
+        <Button type="submit" disabled={pending} className="w-full">
+          {pending ? 'Guardando...' : 'Guardar métricas'}
+        </Button>
+      </form>
+
+      <Toast />
+    </div>
   );
 }

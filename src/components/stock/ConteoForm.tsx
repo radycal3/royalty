@@ -41,7 +41,7 @@ export default function ConteoForm({
       .map((ing) => ({
         ingredienteId: ing.id,
         cantidad: parseFloat(valores[ing.id]),
-        unidad: ing.unidadCompra,
+        unidad: ing.conteoEnUnidadReceta ? ing.unidadReceta : ing.unidadCompra,
       }));
 
     if (!filas.length) {
@@ -91,7 +91,7 @@ export default function ConteoForm({
                 className="w-24 px-3 py-2 rounded-lg border border-border bg-surface text-text-primary text-right
                            placeholder:text-text-muted focus:outline-none focus:ring-2 focus:ring-brand/30 focus:border-brand"
               />
-              <span className="text-xs text-text-muted w-16">{ing.unidadCompra}</span>
+              <span className="text-xs text-text-muted w-16">{ing.conteoEnUnidadReceta ? ing.unidadReceta : ing.unidadCompra}</span>
             </div>
           </div>
         ))}

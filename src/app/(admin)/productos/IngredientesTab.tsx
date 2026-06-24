@@ -16,7 +16,7 @@ import {
 type IngredienteConCosto = {
   id: string; nombre: string; unidad_compra: string; unidad_receta: string;
   factor_conversion: number; controlado_stock: boolean; activo: boolean;
-  costo_vigente: number | null;
+  costo_vigente: number | null; conteo_en_unidad_receta: boolean;
 }
 
 type CostoHistorico = {
@@ -241,6 +241,7 @@ function FormIngrediente({ onSubmit, pending, initial, isNew }: {
 }) {
   const [controladoStock, setControladoStock] = useState(initial?.controlado_stock ?? true)
   const [activo, setActivo] = useState(initial?.activo ?? true)
+  const [conteoEnReceta, setConteoEnReceta] = useState(initial?.conteo_en_unidad_receta ?? false)
 
   return (
     <form action={onSubmit} className="space-y-4">
@@ -271,6 +272,13 @@ function FormIngrediente({ onSubmit, pending, initial, isNew }: {
           </label>
         )}
       </div>
+      {controladoStock && (
+        <label className="flex items-center gap-2 text-sm text-text-secondary cursor-pointer">
+          <input type="hidden" name="conteo_en_unidad_receta" value="false" />
+          <input type="checkbox" name="conteo_en_unidad_receta" value="true" checked={conteoEnReceta} onChange={(e) => setConteoEnReceta(e.target.checked)} className="rounded border-border" />
+          Contar stock en unidad de receta ({initial?.unidad_receta || 'ej: medallón'}) en vez de unidad de compra
+        </label>
+      )}
       <Button type="submit" disabled={pending}>{isNew ? 'Crear ingrediente' : 'Guardar cambios'}</Button>
     </form>
   )

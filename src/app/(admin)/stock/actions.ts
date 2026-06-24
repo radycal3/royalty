@@ -11,6 +11,7 @@ export type IngredienteStock = {
   unidadCompra: string;
   unidadReceta: string;
   factorConversion: number;
+  conteoEnUnidadReceta: boolean;
 };
 
 export type CompraIngrediente = {
@@ -79,7 +80,7 @@ export async function obtenerIngredientesControlados(): Promise<IngredienteStock
 
   const { data, error } = await supabase
     .from('ingredientes')
-    .select('id, nombre, unidad_compra, unidad_receta, factor_conversion')
+    .select('id, nombre, unidad_compra, unidad_receta, factor_conversion, conteo_en_unidad_receta')
     .eq('controlado_stock', true)
     .eq('activo', true)
     .order('nombre');
@@ -92,6 +93,7 @@ export async function obtenerIngredientesControlados(): Promise<IngredienteStock
     unidadCompra: i.unidad_compra,
     unidadReceta: i.unidad_receta,
     factorConversion: i.factor_conversion,
+    conteoEnUnidadReceta: i.conteo_en_unidad_receta,
   }));
 }
 
@@ -256,9 +258,18 @@ async function obtenerConsumoInternoPorIngrediente(
 }
 
 // ─── Análisis de merma del período ──────────────────────────────────────────
-// Consumo real = stock_inicio + compras − stock_fin (en unidad_compra),
-// convertido a unidad_receta con factor_conversion para poder compararlo
-// con el consumo teórico de ventas (que ya viene en unidad_receta).
+// Consumo real = stock_inicio + compras − stock_fin, todo normalizado a
+// unidad_receta antes de combinarse, para poder compararlo con el consumo
+// teórico de ventas (que ya viene en unidad_receta).
+//
+// Las compras (compras_ingredientes) siempre quedan en unidad_compra — así
+// compra Lucas. Los conteos (conteos_stock) pueden estar en unidad_compra
+// O en unidad_receta según `ingredientes.conteo_en_unidad_receta` (ej.
+// Carne se cuenta en medallones, no en kg, porque es más preciso para el
+// equipo). Por eso cada cantidad se convierte individualmente con
+// factor_conversion antes de sumar/restar, en vez de convertir el total al
+// final — si se mezclan unidades, convertir al final daría un resultado
+// incorrecto.
 //
 // Ventana de compras: lunes a domingo de la semana del período, no solo
 // vie-dom — la mercadería suele comprarse en los días previos a abrir.
@@ -286,7 +297,7 @@ export async function obtenerAnalisisMerma(desde: string, hasta: string): Promis
   ] = await Promise.all([
     supabase
       .from('ingredientes')
-      .select('id, nombre, unidad_compra, unidad_receta, factor_conversion')
+      .select('id, nombre, unidad_compra, unidad_receta, factor_conversion, conteo_en_unidad_receta')
       .eq('controlado_stock', true)
       .eq('activo', true)
       .order('nombre'),
@@ -350,8 +361,19 @@ export async function obtenerAnalisisMerma(desde: string, hasta: string): Promis
     let semaforo: 'verde' | 'amarillo' | 'rojo' | null = null;
 
     if (datosCompletos) {
-      const consumoRealUnidadCompra = stockInicio! + comprasCantidad - stockFin!;
-      consumoReal = consumoRealUnidadCompra * ing.factor_conversion;
+      // Cada término se pasa a unidad_receta de forma independiente antes
+      // de combinarlos — stockInicio/stockFin pueden venir en unidad_receta
+      // (si conteo_en_unidad_receta) o en unidad_compra; las compras
+      // siempre están en unidad_compra.
+      const stockInicioReceta = ing.conteo_en_unidad_receta
+        ? stockInicio!
+        : stockInicio! * ing.factor_conversion;
+      const stockFinReceta = ing.conteo_en_unidad_receta
+        ? stockFin!
+        : stockFin! * ing.factor_conversion;
+      const comprasReceta = comprasCantidad * ing.factor_conversion;
+
+      consumoReal = stockInicioReceta + comprasReceta - stockFinReceta;
       merma = consumoReal - consumoTeoricoVentas - consumoInternoRegistrado;
       mermaPct = consumoReal > 0 ? (merma / consumoReal) * 100 : null;
       mermaPesos = costoUnitarioRecetaPromedio !== null ? merma * costoUnitarioRecetaPromedio : null;

@@ -4,6 +4,9 @@ import { useState, useEffect } from 'react';
 import { Beef, ShoppingBag, TrendingUp } from 'lucide-react';
 import { obtenerResumenEmpleado, obtenerMargenHistorico, obtenerMetasEquipo } from './actions';
 import type { ResumenEmpleado, MargenSemana, MetaEquipo } from './actions';
+import { obtenerMetricasHistorico } from '../../(admin)/equipo/actions';
+import type { MetricasEquipoSemana } from '../../(admin)/equipo/actions';
+import { formatDate } from '@/lib/utils/format';
 
 const COLOR_BAR: Record<string, string> = {
   gray: '#9ca3af',
@@ -23,18 +26,21 @@ export default function PanelEmpleadoPage() {
   const [resumen, setResumen] = useState<ResumenEmpleado | null>(null);
   const [historico, setHistorico] = useState<MargenSemana[]>([]);
   const [metas, setMetas] = useState<MetaEquipo[]>([]);
+  const [metricasEquipo, setMetricasEquipo] = useState<MetricasEquipoSemana[]>([]);
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     (async () => {
-      const [r, h, m] = await Promise.all([
+      const [r, h, m, me] = await Promise.all([
         obtenerResumenEmpleado(),
         obtenerMargenHistorico(8),
         obtenerMetasEquipo(),
+        obtenerMetricasHistorico(8),
       ]);
       setResumen(r);
       setHistorico(h);
       setMetas(m);
+      setMetricasEquipo(me);
       setLoaded(true);
     })();
   }, []);
@@ -106,6 +112,61 @@ export default function PanelEmpleadoPage() {
           <GraficoMargen historico={historico} metas={metasOrdenadas} />
         )}
       </div>
+
+      {/* Métricas de equipo — sin montos en pesos */}
+      <div className="bg-surface rounded-xl border border-border p-5">
+        <h2 className="text-sm font-semibold text-text-primary mb-4">Métricas del equipo</h2>
+        <TablaMetricasEquipo metricas={metricasEquipo} />
+      </div>
+    </div>
+  );
+}
+
+function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] }) {
+  const conDatos = metricas.filter((m) =>
+    m.mensajesRecibidos != null || m.mensajesConvertidos != null ||
+    m.tiempoPromedioProduccionMin != null || m.quejasFaltantes != null || m.quejasCalidad != null
+  );
+
+  if (conDatos.length === 0) {
+    return <p className="text-sm text-text-muted py-6 text-center">Todavía no hay métricas cargadas.</p>;
+  }
+
+  return (
+    <div className="overflow-x-auto">
+      <table className="w-full text-sm">
+        <thead>
+          <tr className="border-b border-border text-left text-xs text-text-muted">
+            <th className="pb-2 font-medium">Semana</th>
+            <th className="pb-2 text-right font-medium">Mensajes</th>
+            <th className="pb-2 text-right font-medium">Conversión</th>
+            <th className="pb-2 text-right font-medium">T. producción</th>
+            <th className="pb-2 text-right font-medium">Quejas faltantes</th>
+            <th className="pb-2 text-right font-medium">Quejas calidad</th>
+          </tr>
+        </thead>
+        <tbody className="divide-y divide-border/50">
+          {[...conDatos].reverse().map((m) => {
+            const tasa = m.mensajesRecibidos && m.mensajesRecibidos > 0 && m.mensajesConvertidos != null
+              ? `${((m.mensajesConvertidos / m.mensajesRecibidos) * 100).toFixed(0)}%`
+              : '—';
+            return (
+              <tr key={m.periodoDesde}>
+                <td className="py-2 text-text-secondary">{formatDate(m.periodoDesde)}</td>
+                <td className="py-2 text-right tabular-nums text-text-primary">
+                  {m.mensajesRecibidos ?? '—'} → {m.mensajesConvertidos ?? '—'}
+                </td>
+                <td className="py-2 text-right tabular-nums text-text-primary">{tasa}</td>
+                <td className="py-2 text-right tabular-nums text-text-primary">
+                  {m.tiempoPromedioProduccionMin != null ? `${m.tiempoPromedioProduccionMin} min` : '—'}
+                </td>
+                <td className="py-2 text-right tabular-nums text-text-primary">{m.quejasFaltantes ?? '—'}</td>
+                <td className="py-2 text-right tabular-nums text-text-primary">{m.quejasCalidad ?? '—'}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }
