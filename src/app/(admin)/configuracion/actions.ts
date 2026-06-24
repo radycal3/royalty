@@ -257,3 +257,79 @@ export async function guardarConfigProductosConsumo(
     return { ok: false, mensaje: err instanceof Error ? err.message : 'Error al guardar' };
   }
 }
+
+// ─── Metas del equipo (dashboard de empleados) ─────────────────────────────
+// Tabla relacional, no key-value (ver migración 028). La descripcion no
+// debe incluir montos en pesos — los empleados nunca ven montos en pesos.
+
+export type ColorMeta = 'gray' | 'green' | 'yellow' | 'red';
+
+export type MetaEquipoConfig = {
+  id: string;
+  nivel: number;
+  margenMinimo: number;
+  descripcion: string;
+  color: ColorMeta;
+  activo: boolean;
+};
+
+export async function obtenerMetasEquipoConfig(): Promise<MetaEquipoConfig[]> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data, error } = await supabase.from('metas_equipo').select('*').order('nivel');
+  if (error) throw new Error(error.message);
+
+  return (data || []).map((m: any) => ({
+    id: m.id,
+    nivel: m.nivel,
+    margenMinimo: m.margen_minimo,
+    descripcion: m.descripcion,
+    color: m.color,
+    activo: m.activo,
+  }));
+}
+
+export async function actualizarMetaEquipo(
+  id: string,
+  input: { margenMinimo: number; descripcion: string; color: ColorMeta; activo: boolean }
+): Promise<{ ok: true } | { ok: false; mensaje: string }> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  if (!input.descripcion.trim()) return { ok: false, mensaje: 'La descripción es obligatoria' };
+
+  const { error } = await supabase
+    .from('metas_equipo')
+    .update({
+      margen_minimo: input.margenMinimo,
+      descripcion: input.descripcion.trim(),
+      color: input.color,
+      activo: input.activo,
+    })
+    .eq('id', id);
+
+  if (error) return { ok: false, mensaje: error.message };
+  return { ok: true };
+}
+
+export async function crearMetaEquipo(
+  input: { nivel: number; margenMinimo: number; descripcion: string; color: ColorMeta }
+): Promise<{ ok: true } | { ok: false; mensaje: string }> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { error } = await supabase.from('metas_equipo').insert({
+    nivel: input.nivel,
+    margen_minimo: input.margenMinimo,
+    descripcion: input.descripcion.trim(),
+    color: input.color,
+    activo: true,
+  });
+
+  if (error) return { ok: false, mensaje: error.message };
+  return { ok: true };
+}

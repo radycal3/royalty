@@ -1,6 +1,7 @@
 import { createClient } from '@/lib/supabase/server'
 import { Crown } from 'lucide-react'
 import LogoutButton from '@/components/layout/LogoutButton'
+import EmpleadoNav from '@/components/layout/EmpleadoNav'
 
 export default async function EmpleadoLayout({
   children,
@@ -28,6 +29,7 @@ export default async function EmpleadoLayout({
           <LogoutButton />
         </div>
       </header>
+      <EmpleadoNav />
       <main className="max-w-4xl mx-auto p-6">{children}</main>
     </div>
   )

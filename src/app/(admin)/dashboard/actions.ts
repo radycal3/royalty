@@ -77,7 +77,7 @@ export type IngredienteConsumo = {
 // con un campo origen distinto. Las queries del dashboard no filtran por origen,
 // así que funcionarían sin cambios.
 
-async function calcularKpis(
+export async function calcularKpis(
   supabase: any,
   desde: string,
   hasta: string

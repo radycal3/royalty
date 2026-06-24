@@ -11,11 +11,16 @@ import {
   obtenerConfigProductosConsumo,
   guardarConfigProductosConsumo,
   obtenerProductosActivos,
+  obtenerMetasEquipoConfig,
+  actualizarMetaEquipo,
+  crearMetaEquipo,
   type ConfigCadeteria,
   type ConfigMeta,
   type ConfigAlertas,
   type ConfigProductosConsumo,
   type ProductoOpcion,
+  type MetaEquipoConfig,
+  type ColorMeta,
 } from './actions';
 import { Field, Input, Select, Button, useToast } from '@/components/ui';
 
@@ -73,23 +78,28 @@ export default function ConfiguracionPage() {
   const [productosOpciones, setProductosOpciones] = useState<ProductoOpcion[]>([]);
   const [guardandoProductos, setGuardandoProductos] = useState(false);
 
+  // Metas del equipo
+  const [metasEquipo, setMetasEquipo] = useState<MetaEquipoConfig[]>([]);
+
   useEffect(() => {
     async function cargarTodo() {
       setLoading(true);
       setError(null);
       try {
-        const [c, m, a, pc, opciones] = await Promise.all([
+        const [c, m, a, pc, opciones, metas] = await Promise.all([
           obtenerConfigCadeteria(),
           obtenerConfigMeta(),
           obtenerConfigAlertas(),
           obtenerConfigProductosConsumo(),
           obtenerProductosActivos(),
+          obtenerMetasEquipoConfig(),
         ]);
         setCadeteria(c);
         setMeta(m);
         setAlertas(a);
         setProductosConsumo(pc);
         setProductosOpciones(opciones);
+        setMetasEquipo(metas);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Error al cargar configuración');
       } finally {
@@ -98,6 +108,10 @@ export default function ConfiguracionPage() {
     }
     cargarTodo();
   }, []);
+
+  async function recargarMetas() {
+    setMetasEquipo(await obtenerMetasEquipoConfig());
+  }
 
   async function handleGuardarCadeteria() {
     if (!cadeteria) return;
@@ -369,7 +383,142 @@ export default function ConfiguracionPage() {
         </Seccion>
       )}
 
+      {/* ── Metas del equipo ──────────────────────────────────────────── */}
+      <SeccionMetasEquipo metas={metasEquipo} onCambio={recargarMetas} showToast={showToast} />
+
       <Toast />
+    </div>
+  );
+}
+
+// ─── Metas del equipo (dashboard de empleados, /panel) ─────────────────────
+
+const COLORES_META: ColorMeta[] = ['gray', 'yellow', 'green', 'red'];
+
+function SeccionMetasEquipo({
+  metas,
+  onCambio,
+  showToast,
+}: {
+  metas: MetaEquipoConfig[];
+  onCambio: () => void;
+  showToast: (msg: string, type?: 'success' | 'error') => void;
+}) {
+  const [guardandoId, setGuardandoId] = useState<string | null>(null);
+  const [agregando, setAgregando] = useState(false);
+
+  async function handleGuardar(m: MetaEquipoConfig) {
+    setGuardandoId(m.id);
+    const r = await actualizarMetaEquipo(m.id, {
+      margenMinimo: m.margenMinimo,
+      descripcion: m.descripcion,
+      color: m.color,
+      activo: m.activo,
+    });
+    if (!r.ok) showToast(r.mensaje, 'error');
+    else showToast('Meta actualizada');
+    setGuardandoId(null);
+    onCambio();
+  }
+
+  async function handleAgregar() {
+    const siguienteNivel = metas.length > 0 ? Math.max(...metas.map((m) => m.nivel)) + 1 : 1;
+    if (siguienteNivel > 5) return;
+    setAgregando(true);
+    const r = await crearMetaEquipo({
+      nivel: siguienteNivel,
+      margenMinimo: 0,
+      descripcion: 'Nuevo nivel',
+      color: 'gray',
+    });
+    if (!r.ok) showToast(r.mensaje, 'error');
+    setAgregando(false);
+    onCambio();
+  }
+
+  return (
+    <div className="rounded-lg border border-border bg-surface p-5">
+      <h2 className="text-sm font-semibold text-text-primary">Metas del equipo</h2>
+      <p className="mt-1 text-xs text-text-muted">
+        Niveles de recompensa por margen neto, visibles para empleados en /panel. Evitá poner
+        montos en pesos en la descripción — los empleados nunca ven montos en pesos.
+      </p>
+      <div className="mt-4 space-y-3">
+        {metas.map((m) => (
+          <FilaMeta key={m.id} meta={m} guardando={guardandoId === m.id} onGuardar={handleGuardar} />
+        ))}
+      </div>
+      {metas.length < 5 && (
+        <div className="mt-4 flex justify-end">
+          <Button variant="secondary" size="sm" onClick={handleAgregar} disabled={agregando}>
+            {agregando ? 'Agregando…' : '+ Agregar nivel'}
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function FilaMeta({
+  meta,
+  guardando,
+  onGuardar,
+}: {
+  meta: MetaEquipoConfig;
+  guardando: boolean;
+  onGuardar: (m: MetaEquipoConfig) => void;
+}) {
+  const [local, setLocal] = useState(meta);
+
+  return (
+    <div className="grid grid-cols-12 gap-2 items-end border-b border-border pb-3 last:border-0 last:pb-0">
+      <div className="col-span-1 text-xs text-text-muted pb-2">Nivel {local.nivel}</div>
+      <div className="col-span-4">
+        <Field label="Descripción">
+          <Input
+            type="text"
+            value={local.descripcion}
+            onChange={(e) => setLocal({ ...local, descripcion: e.target.value })}
+          />
+        </Field>
+      </div>
+      <div className="col-span-2">
+        <Field label="Desde (%)">
+          <Input
+            type="number"
+            value={local.margenMinimo}
+            onChange={(e) => setLocal({ ...local, margenMinimo: parseFloat(e.target.value) || 0 })}
+          />
+        </Field>
+      </div>
+      <div className="col-span-2">
+        <Field label="Color">
+          <Select
+            value={local.color}
+            onChange={(e) => setLocal({ ...local, color: e.target.value as ColorMeta })}
+          >
+            {COLORES_META.map((c) => (
+              <option key={c} value={c}>{c}</option>
+            ))}
+          </Select>
+        </Field>
+      </div>
+      <div className="col-span-1 pb-2">
+        <label className="flex items-center gap-1.5 text-xs text-text-secondary cursor-pointer">
+          <input
+            type="checkbox"
+            checked={local.activo}
+            onChange={(e) => setLocal({ ...local, activo: e.target.checked })}
+            className="rounded border-border"
+          />
+          Activo
+        </label>
+      </div>
+      <div className="col-span-2 pb-0.5">
+        <Button size="sm" onClick={() => onGuardar(local)} disabled={guardando} className="w-full">
+          {guardando ? 'Guardando…' : 'Guardar'}
+        </Button>
+      </div>
     </div>
   );
 }

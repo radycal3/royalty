@@ -52,18 +52,19 @@ export async function middleware(request: NextRequest) {
   // Get user role
   const { data: usuario } = await supabase
     .from('usuarios')
-    .select('rol')
+    .select('rol, activo')
     .eq('id', user.id)
     .single()
 
-  if (!usuario) {
+  if (!usuario || !usuario.activo) {
+    await supabase.auth.signOut()
     return NextResponse.redirect(new URL('/login', request.url))
   }
 
   // Admin routes — block employees
   const adminRoutes = [
     '/dashboard', '/importar', '/productos', '/gastos',
-    '/stock', '/equipo', '/cadetes', '/laboratorio', '/configuracion'
+    '/stock', '/equipo', '/usuarios', '/cadetes', '/laboratorio', '/configuracion'
   ]
   if (adminRoutes.some(r => path.startsWith(r)) && usuario.rol !== 'admin') {
     return NextResponse.redirect(new URL('/panel', request.url))
