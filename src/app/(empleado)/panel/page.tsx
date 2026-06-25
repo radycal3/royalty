@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Beef, ShoppingBag, TrendingUp } from 'lucide-react';
+import { ShoppingBag, TrendingUp } from 'lucide-react';
 import { obtenerResumenEmpleado, obtenerMargenHistorico, obtenerMetasEquipo } from './actions';
 import type { ResumenEmpleado, MargenSemana, MetaEquipo } from './actions';
 import { obtenerMetricasHistorico } from '../../(admin)/equipo/actions';
@@ -61,8 +61,7 @@ export default function PanelEmpleadoPage() {
       </div>
 
       {/* Bloque 1: resultado en vivo */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-        <StatGrande icon={<Beef className="w-6 h-6" />} label="Hamburguesas vendidas" valor={resumen.hamburguesasVendidas.toLocaleString('es-AR')} />
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
         <StatGrande icon={<ShoppingBag className="w-6 h-6" />} label="Pedidos" valor={resumen.pedidos.toLocaleString('es-AR')} />
         <StatGrande icon={<TrendingUp className="w-6 h-6" />} label="Margen neto" valor={`${resumen.margenNeto.toFixed(1)}%`} />
       </div>

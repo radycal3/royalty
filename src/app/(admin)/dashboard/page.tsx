@@ -155,6 +155,64 @@ function KpiCard({
   );
 }
 
+function KpiCardHero({
+  titulo,
+  valor,
+  colorValor,
+  children,
+}: {
+  titulo: string;
+  valor: string;
+  colorValor?: string;
+  children?: React.ReactNode;
+}) {
+  return (
+    <div className="rounded-xl border border-border bg-surface p-5" data-print="section">
+      <div className="text-xs font-medium uppercase tracking-wide text-text-muted">{titulo}</div>
+      <div className={`mt-2 text-3xl font-bold tabular-nums ${colorValor ?? 'text-text-primary'}`}>
+        {valor}
+      </div>
+      <div className="mt-2">{children}</div>
+    </div>
+  );
+}
+
+function ZonaDivisor({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 py-1" data-print="hidden">
+      <div className="h-px flex-1 bg-border" />
+      <span className="shrink-0 text-xs font-medium text-text-muted">{label}</span>
+      <div className="h-px flex-1 bg-border" />
+    </div>
+  );
+}
+
+function SeccionColapsable({
+  titulo,
+  children,
+}: {
+  titulo: string;
+  children: React.ReactNode;
+}) {
+  const [abierto, setAbierto] = useState(false);
+  return (
+    <div className="rounded-lg border border-border bg-surface">
+      <button
+        onClick={() => setAbierto((a) => !a)}
+        className="flex w-full items-center justify-between px-5 py-4 text-left hover:bg-surface-alt"
+      >
+        <span className="text-sm font-semibold text-text-primary">{titulo}</span>
+        <span className="text-xs text-text-muted">{abierto ? '▲ ocultar' : '▼ ver'}</span>
+      </button>
+      {abierto && (
+        <div className="border-t border-border px-5 pb-5 pt-4">
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FilaCascada({
   label,
   valor,
@@ -2413,115 +2471,44 @@ export default function DashboardPage() {
         <div className="py-16 text-center text-sm text-text-muted">Cargando dashboard…</div>
       ) : kpis ? (
         <div className={loading ? 'space-y-6 opacity-60 transition-opacity' : 'space-y-6'}>
-          {/* ── KPI Cards ──────────────────────────────────────────── */}
-          <div data-print="section" className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
-            <KpiCard titulo="Pedidos" valor={kpis.actual.pedidos.toString()}>
-              <Delta actual={kpis.actual.pedidos} anterior={kpis.anterior?.pedidos ?? null} />
-            </KpiCard>
-            <KpiCard titulo="Ventas" valor={formatARS(kpis.actual.ventas)}>
+          {/* ── Zona 1: Resultado rápido ───────────────────────────── */}
+          <div data-print="section" className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <KpiCardHero titulo="Ventas" valor={formatARS(kpis.actual.ventas)}>
               <Delta actual={kpis.actual.ventas} anterior={kpis.anterior?.ventas ?? null} />
-            </KpiCard>
-            <KpiCard titulo="Costo ingredientes" valor={formatARS(kpis.actual.costoIngredientes)}>
-              <Delta
-                actual={kpis.actual.costoIngredientes}
-                anterior={kpis.anterior?.costoIngredientes ?? null}
-                invertido
-              />
-            </KpiCard>
-            <KpiCard titulo="Beneficio bruto" valor={formatARS(kpis.actual.beneficioBruto)}>
-              <Delta
-                actual={kpis.actual.beneficioBruto}
-                anterior={kpis.anterior?.beneficioBruto ?? null}
-              />
-            </KpiCard>
-            <KpiCard titulo="Margen bruto" valor={formatPercent(kpis.actual.margenBruto)}>
-              <Delta
-                actual={kpis.actual.margenBruto}
-                anterior={kpis.anterior?.margenBruto ?? null}
-                esPuntoPorcentual
-              />
-            </KpiCard>
-            <KpiCard titulo="Consumo interno" valor={formatARS(kpis.actual.costoConsumoInterno)}>
-              <Delta
-                actual={kpis.actual.costoConsumoInterno}
-                anterior={kpis.anterior?.costoConsumoInterno ?? null}
-                invertido
-              />
-            </KpiCard>
-            <KpiCard titulo="Gastos operativos" valor={formatARS(kpis.actual.gastosTotal)}>
-              <Delta
-                actual={kpis.actual.gastosTotal}
-                anterior={kpis.anterior?.gastosTotal ?? null}
-                invertido
-              />
-            </KpiCard>
-            <KpiCard titulo="Beneficio neto" valor={formatARS(kpis.actual.beneficioNeto)}>
-              <Delta
-                actual={kpis.actual.beneficioNeto}
-                anterior={kpis.anterior?.beneficioNeto ?? null}
-              />
-            </KpiCard>
-            <KpiCard titulo="Margen neto" valor={formatPercent(kpis.actual.margenNeto)}>
+            </KpiCardHero>
+            <KpiCardHero
+              titulo="Beneficio neto"
+              valor={formatARS(kpis.actual.beneficioNeto)}
+              colorValor={kpis.actual.beneficioNeto < 0 ? 'text-negative' : 'text-text-primary'}
+            >
+              <Delta actual={kpis.actual.beneficioNeto} anterior={kpis.anterior?.beneficioNeto ?? null} />
+            </KpiCardHero>
+            <KpiCardHero
+              titulo="Margen neto"
+              valor={formatPercent(kpis.actual.margenNeto)}
+              colorValor={kpis.actual.margenNeto < 0 ? 'text-negative' : 'text-text-primary'}
+            >
               <Delta
                 actual={kpis.actual.margenNeto}
                 anterior={kpis.anterior?.margenNeto ?? null}
                 esPuntoPorcentual
               />
-            </KpiCard>
-            <KpiCard titulo="Ticket promedio" valor={formatARS(kpis.actual.ticketPromedio)}>
-              <Delta
-                actual={kpis.actual.ticketPromedio}
-                anterior={kpis.anterior?.ticketPromedio ?? null}
-              />
-            </KpiCard>
-            <KpiCard
+            </KpiCardHero>
+            <KpiCardHero
               titulo="ROAS"
               valor={kpis.actual.roas > 0 ? `${kpis.actual.roas.toFixed(2)}x` : '—'}
             >
               {kpis.actual.gastoPublicidad === 0 ? (
                 <span className="text-xs text-text-muted">Sin gasto en publicidad</span>
               ) : kpis.anterior && kpis.anterior.gastoPublicidad === 0 ? (
-                // Hay período anterior, pero sin gasto en publicidad: el ROAS
-                // anterior da 0 por ausencia de dato, no por mal desempeño.
-                // No es "sin comparativo" — es que la pauta arrancó este período.
                 <span className="text-xs text-text-muted">Publicidad nueva este período</span>
               ) : (
                 <Delta actual={kpis.actual.roas} anterior={kpis.anterior?.roas ?? null} />
               )}
-            </KpiCard>
-            <KpiCard titulo="Publicidad % s/ventas" valor={formatPercent(kpis.actual.publicidadPct)}>
-              <Delta
-                actual={kpis.actual.publicidadPct}
-                anterior={kpis.anterior?.publicidadPct ?? null}
-                invertido
-                esPuntoPorcentual
-              />
-            </KpiCard>
-
-            {/* ── Clientes repetidores en el período ── */}
-            <KpiCard
-              titulo="Pedidos de clientes conocidos"
-              valor={`${kpis.actual.pedidosRepetidores} / ${kpis.actual.pedidos}`}
-            >
-              <Delta
-                actual={kpis.actual.pedidosRepetidores}
-                anterior={kpis.anterior?.pedidosRepetidores ?? null}
-              />
-            </KpiCard>
-            <KpiCard titulo="Ventas — clientes conocidos" valor={formatARS(kpis.actual.ventasRepetidores)}>
-              <Delta
-                actual={kpis.actual.ventasRepetidores}
-                anterior={kpis.anterior?.ventasRepetidores ?? null}
-              />
-            </KpiCard>
-            <KpiCard titulo="% ventas clientes conocidos" valor={formatPercent(kpis.actual.pctVentasRepetidores)}>
-              <Delta
-                actual={kpis.actual.pctVentasRepetidores}
-                anterior={kpis.anterior?.pctVentasRepetidores ?? null}
-                esPuntoPorcentual
-              />
-            </KpiCard>
+            </KpiCardHero>
           </div>
+
+          <ZonaDivisor label="Por qué ese resultado" />
 
           {/* ── Cascada P&L ────────────────────────────────────────── */}
           <div className="rounded-lg border border-border bg-surface p-5">
@@ -2685,10 +2672,11 @@ export default function DashboardPage() {
             </div>
           )}
 
+          <ZonaDivisor label="Evolución e inteligencia" />
+
           {/* ── Rankings de productos ──────────────────────────────── */}
-          <div className="rounded-lg border border-border bg-surface p-5">
-            <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-semibold text-text-primary">Ranking de productos</h2>
+          <SeccionColapsable titulo="Ranking de productos">
+            <div className="mb-3 flex items-center justify-end">
               <div className="flex gap-1 rounded-lg bg-surface-alt p-1">
                 <button
                   onClick={() => setRankingTab('vendidos')}
@@ -2742,13 +2730,10 @@ export default function DashboardPage() {
                 </div>
               </>
             )}
-          </div>
+          </SeccionColapsable>
 
           {/* ── Consumo de ingredientes ────────────────────────────── */}
-          <div className="rounded-lg border border-border bg-surface p-5">
-            <h2 className="mb-3 text-sm font-semibold text-text-primary">
-              Consumo de ingredientes
-            </h2>
+          <SeccionColapsable titulo="Consumo de ingredientes">
             {ingredientes.length === 0 ? (
               <EmptyState message="Sin consumo de ingredientes en este período" />
             ) : (
@@ -2780,7 +2765,7 @@ export default function DashboardPage() {
                 </tbody>
               </table>
             )}
-          </div>
+          </SeccionColapsable>
         </div>
       ) : null}
 
