@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import type { MetaAdsFilaDetalle } from '@/lib/utils/meta-ads-parser';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -15,6 +16,15 @@ export type MetaAdsImportacion = {
   clics: number | null;
   resultados: number | null;
   nombreArchivo: string | null;
+};
+
+export type MetaAdsConjuntoResumen = {
+  nombre: string;
+  tipoAudiencia: 'caliente' | 'fría';
+  gastoArs: number;
+  conversaciones: number;
+  costoPorConversacion: number | null;
+  ctrEnlace: number | null;
 };
 
 function mapImportacion(d: any): MetaAdsImportacion {
@@ -49,8 +59,7 @@ export async function obtenerMetaAdsPeriodo(periodoDesde: string): Promise<MetaA
   return data ? mapImportacion(data) : null;
 }
 
-// Total de gastos de categoria='publicidad' ya cargados para el rango —
-// para avisar antes de reemplazar, sea manual o de una importación previa.
+// Total de gastos de categoria='publicidad' ya cargados para el rango.
 export async function obtenerGastoPublicidadExistente(periodoDesde: string, periodoHasta: string): Promise<number> {
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
@@ -67,10 +76,65 @@ export async function obtenerGastoPublicidadExistente(periodoDesde: string, peri
   return (data || []).reduce((sum: number, g: any) => sum + g.monto, 0);
 }
 
+// Detalle por conjunto, agrupado y sumado, para el Laboratorio.
+export async function obtenerDetalleMetaAds(periodoDesde: string): Promise<MetaAdsConjuntoResumen[]> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const { data, error } = await supabase
+    .from('meta_ads_detalle')
+    .select('nombre_conjunto, tipo_audiencia, gasto_ars, conversaciones, clics_enlace, impresiones')
+    .eq('periodo_desde', periodoDesde);
+
+  if (error) throw new Error(`Error al obtener detalle Meta Ads: ${error.message}`);
+  if (!data || data.length === 0) return [];
+
+  const grupos = new Map<string, {
+    nombre: string;
+    tipoAudiencia: 'caliente' | 'fría';
+    gastoArs: number;
+    conversaciones: number;
+    totalClics: number;
+    totalImpresiones: number;
+  }>();
+
+  for (const row of data) {
+    if (!grupos.has(row.nombre_conjunto)) {
+      grupos.set(row.nombre_conjunto, {
+        nombre: row.nombre_conjunto,
+        tipoAudiencia: row.tipo_audiencia as 'caliente' | 'fría',
+        gastoArs: 0,
+        conversaciones: 0,
+        totalClics: 0,
+        totalImpresiones: 0,
+      });
+    }
+    const g = grupos.get(row.nombre_conjunto)!;
+    g.gastoArs        += row.gasto_ars       ?? 0;
+    g.conversaciones  += row.conversaciones  ?? 0;
+    g.totalClics      += row.clics_enlace    ?? 0;
+    g.totalImpresiones += row.impresiones    ?? 0;
+  }
+
+  return Array.from(grupos.values()).map((g) => ({
+    nombre: g.nombre,
+    tipoAudiencia: g.tipoAudiencia,
+    gastoArs: Math.round(g.gastoArs * 100) / 100,
+    conversaciones: g.conversaciones,
+    costoPorConversacion: g.conversaciones > 0
+      ? Math.round((g.gastoArs / g.conversaciones) * 100) / 100
+      : null,
+    ctrEnlace: g.totalImpresiones > 0
+      ? Math.round((g.totalClics / g.totalImpresiones) * 100 * 10000) / 10000
+      : null,
+  }));
+}
+
 // ─── Importar / reemplazar ──────────────────────────────────────────────────
-// Borra cualquier gasto categoria='publicidad' ya cargado en el rango
-// (manual o de una importación anterior) y lo reemplaza por el total de
-// Meta Ads convertido a ARS — para no duplicar publicidad.
+// Borra cualquier gasto categoria='publicidad' ya cargado en el rango y lo
+// reemplaza por el total de Meta Ads convertido a ARS. También reemplaza el
+// detalle por conjunto de la tabla meta_ads_detalle.
 
 export async function importarMetaAds(input: {
   periodoDesde: string;
@@ -82,6 +146,8 @@ export async function importarMetaAds(input: {
   clics: number | null;
   resultados: number | null;
   nombreArchivo: string | null;
+  tipoAudienciaMap: Record<string, 'caliente' | 'fría'>;
+  filas: MetaAdsFilaDetalle[];
 }): Promise<{ error: string } | { success: true; gastoArs: number }> {
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
@@ -122,30 +188,61 @@ export async function importarMetaAds(input: {
     gastoOperativoId = gastoCreado.id;
   }
 
-  const { error: errorImport } = await supabase.from('meta_ads_importaciones').upsert(
-    {
-      periodo_desde: input.periodoDesde,
-      periodo_hasta: input.periodoHasta,
-      gasto_operativo_id: gastoOperativoId,
-      gasto_usd: input.gastoUsd,
-      tipo_cambio: input.tipoCambio,
-      gasto_ars: gastoArs,
-      alcance: input.alcance,
-      impresiones: input.impresiones,
-      clics: input.clics,
-      resultados: input.resultados,
-      nombre_archivo: input.nombreArchivo,
-      registrado_por: user.user.id,
-    },
-    { onConflict: 'periodo_desde' }
-  );
+  const { data: importacionData, error: errorImport } = await supabase
+    .from('meta_ads_importaciones')
+    .upsert(
+      {
+        periodo_desde: input.periodoDesde,
+        periodo_hasta: input.periodoHasta,
+        gasto_operativo_id: gastoOperativoId,
+        gasto_usd: input.gastoUsd,
+        tipo_cambio: input.tipoCambio,
+        gasto_ars: gastoArs,
+        alcance: input.alcance,
+        impresiones: input.impresiones,
+        clics: input.clics,
+        resultados: input.resultados,
+        nombre_archivo: input.nombreArchivo,
+        registrado_por: user.user.id,
+      },
+      { onConflict: 'periodo_desde' }
+    )
+    .select('id')
+    .single();
 
   if (errorImport) return { error: errorImport.message };
+
+  // Reemplazar detalle anterior y cargar el nuevo
+  await supabase.from('meta_ads_detalle').delete().eq('importacion_id', importacionData.id);
+
+  const filasConTipo = input.filas.filter((f) => input.tipoAudienciaMap[f.nombreConjunto] !== undefined);
+  if (filasConTipo.length > 0) {
+    const detalleRows = filasConTipo.map((f) => ({
+      importacion_id:          importacionData.id,
+      periodo_desde:           input.periodoDesde,
+      nombre_campana:          f.nombreCampana  || null,
+      nombre_conjunto:         f.nombreConjunto,
+      nombre_anuncio:          f.nombreAnuncio  || null,
+      tipo_audiencia:          input.tipoAudienciaMap[f.nombreConjunto],
+      gasto_usd:               f.gastoUsd,
+      gasto_ars:               Math.round(f.gastoUsd * input.tipoCambio * 100) / 100,
+      alcance:                 f.alcance,
+      impresiones:             f.impresiones,
+      conversaciones:          f.conversaciones,
+      costo_por_resultado_usd: f.costoResultadoUsd,
+      ctr_enlace:              f.ctrEnlace,
+      clics_enlace:            f.clicsEnlace,
+    }));
+
+    const { error: errorDetalle } = await supabase.from('meta_ads_detalle').insert(detalleRows);
+    if (errorDetalle) return { error: errorDetalle.message };
+  }
+
   return { success: true, gastoArs };
 }
 
 // Deshace una importación completa: borra la fila de meta_ads_importaciones
-// y el gasto_operativo que generó (si existe). No toca periodos.
+// (ON DELETE CASCADE elimina el detalle) y el gasto_operativo si existe.
 export async function eliminarMetaAdsPeriodo(periodoDesde: string) {
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();

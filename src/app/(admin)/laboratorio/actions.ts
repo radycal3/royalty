@@ -7,7 +7,7 @@ import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
 import { calcularKpis, obtenerSaludClientes } from '../dashboard/actions';
 import { obtenerAnalisisMerma } from '../stock/actions';
 import { obtenerMetricasHistorico, obtenerMetricasPeriodo } from '../equipo/actions';
-import { obtenerMetaAdsPeriodo } from '../gastos/actions-meta-ads';
+import { obtenerMetaAdsPeriodo, obtenerDetalleMetaAds } from '../gastos/actions-meta-ads';
 import { formatARS } from '@/lib/utils/format';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
@@ -381,7 +381,13 @@ Generá entre 3 y 6 recomendaciones ESPECÍFICAS y ACCIONABLES para la semana qu
 - Ser una acción específica que el dueño pueda tomar esta semana, no un consejo genérico de manual de gestión.
 - Tener una justificación que cite el número concreto que la motiva.
 
-Si un bloque del JSON dice "sin_datos_todavia", no generes ninguna recomendación sobre esa área — priorizá las áreas donde sí hay datos reales.`;
+Si un bloque del JSON dice "sin_datos_todavia", no generes ninguna recomendaciones sobre esa área — priorizá las áreas donde sí hay datos reales.
+
+REGLA CRÍTICA — Meta Ads por conjunto:
+El campo "metaAds.porConjunto" muestra cada conjunto de anuncios con su "tipoAudiencia": "caliente" (seguidores e Instagram / compradores previos) o "fría" (audiencia nueva sin relación previa con la marca).
+- NUNCA compares el costo por conversación entre conjuntos de distinto tipo de audiencia. La audiencia caliente tiene menor volumen pero mayor tasa de conversión a pedido real; la fría genera más conversaciones pero convierte menos. Comparar sus costos por conversación lleva a conclusiones incorrectas.
+- Solo compará costo por conversación entre conjuntos del MISMO tipo de audiencia.
+- Al recomendar escalar o pausar un conjunto, basate en: costo por conversación vs otros del mismo tipo, CTR, y contexto financiero general.`;
 
 async function construirContextoKpis(supabase: any, desde: string, hasta: string) {
   const kpis = await calcularKpis(supabase, desde, hasta);
@@ -406,6 +412,7 @@ async function construirContextoKpis(supabase: any, desde: string, hasta: string
   const metricaSemana = metricasRecientes.find((m) => m.periodoDesde === desde) ?? null;
 
   const metaAdsSemana = await obtenerMetaAdsPeriodo(desde);
+  const detalleConjuntos = await obtenerDetalleMetaAds(desde);
 
   return {
     periodo: { desde, hasta },
@@ -451,6 +458,7 @@ async function construirContextoKpis(supabase: any, desde: string, hasta: string
           impresiones: metaAdsSemana.impresiones,
           clics: metaAdsSemana.clics,
           resultados: metaAdsSemana.resultados,
+          porConjunto: detalleConjuntos,
         }
       : 'sin_datos_todavia',
     merma,

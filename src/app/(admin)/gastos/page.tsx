@@ -503,6 +503,8 @@ function FormImportarMetaAds({
   const [parsed, setParsed] = useState<MetaAdsParseResult | null>(null);
   const [parseError, setParseError] = useState<string | null>(null);
   const [tipoCambio, setTipoCambio] = useState('');
+  const [paso, setPaso] = useState<1 | 2>(1);
+  const [tipoAudienciaMap, setTipoAudienciaMap] = useState<Record<string, 'caliente' | 'fría'>>({});
   const [pending, setPending] = useState(false);
   const { show, Toast } = useToast();
 
@@ -523,6 +525,8 @@ function FormImportarMetaAds({
     if (!file) return;
     setParseError(null);
     setParsed(null);
+    setPaso(1);
+    setTipoAudienciaMap({});
     setNombreArchivo(file.name);
 
     const reader = new FileReader();
@@ -541,6 +545,10 @@ function FormImportarMetaAds({
   const tipoCambioNum = parseFloat(tipoCambio);
   const gastoArs = parsed && tipoCambioNum > 0 ? Math.round(parsed.gastoUsd * tipoCambioNum * 100) / 100 : null;
 
+  const todasClasificadas = parsed
+    ? parsed.conjuntosDetectados.every((c) => tipoAudienciaMap[c] !== undefined)
+    : false;
+
   async function handleConfirmar() {
     if (!parsed || !tipoCambioNum || tipoCambioNum <= 0) return;
     setPending(true);
@@ -554,6 +562,8 @@ function FormImportarMetaAds({
       clics: parsed.clics,
       resultados: parsed.resultados,
       nombreArchivo,
+      tipoAudienciaMap,
+      filas: parsed.filas,
     });
     setPending(false);
     if ('error' in r) { show(r.error, 'error'); return; }
@@ -605,54 +615,140 @@ function FormImportarMetaAds({
         </div>
       )}
 
-      <Field label="Archivo CSV exportado de Meta Ads Manager">
-        <input
-          type="file"
-          accept=".csv,text/csv"
-          onChange={handleArchivo}
-          className="block w-full text-sm text-text-secondary"
-        />
-      </Field>
+      {/* ── Paso 1: archivo + tipo de cambio ── */}
+      {paso === 1 && (
+        <>
+          <Field label="Archivo CSV exportado de Meta Ads Manager">
+            <input
+              type="file"
+              accept=".csv,text/csv"
+              onChange={handleArchivo}
+              className="block w-full text-sm text-text-secondary"
+            />
+          </Field>
 
-      {parseError && (
-        <p className="text-sm text-negative bg-negative-bg rounded-lg px-3 py-2">{parseError}</p>
+          {parseError && (
+            <p className="text-sm text-negative bg-negative-bg rounded-lg px-3 py-2">{parseError}</p>
+          )}
+
+          {parsed && (
+            <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm space-y-1">
+              <p className="text-text-primary font-medium">
+                Detectado ({parsed.filasDetectadas} fila{parsed.filasDetectadas !== 1 ? 's' : ''}, {parsed.conjuntosDetectados.length} conjunto{parsed.conjuntosDetectados.length !== 1 ? 's' : ''}):
+              </p>
+              <p className="text-text-secondary">Gasto: USD {parsed.gastoUsd.toLocaleString('es-AR')}</p>
+              {parsed.alcance != null && <p className="text-text-secondary">Alcance: {parsed.alcance.toLocaleString('es-AR')}</p>}
+              {parsed.impresiones != null && <p className="text-text-secondary">Impresiones: {parsed.impresiones.toLocaleString('es-AR')}</p>}
+              {parsed.clics != null && <p className="text-text-secondary">Clics: {parsed.clics.toLocaleString('es-AR')}</p>}
+              {parsed.resultados != null && <p className="text-text-secondary">Conversaciones: {parsed.resultados.toLocaleString('es-AR')}</p>}
+            </div>
+          )}
+
+          <Field label="Tipo de cambio del día" hint="Ej: 1250">
+            <Input
+              type="number"
+              min="0"
+              step="0.01"
+              value={tipoCambio}
+              onChange={(e) => setTipoCambio(e.target.value)}
+              placeholder="1250"
+            />
+          </Field>
+
+          {gastoArs != null && (
+            <p className="text-sm text-text-primary">
+              Gasto total a cargar: <span className="font-semibold">{formatARS(gastoArs)}</span>
+            </p>
+          )}
+
+          <Button
+            onClick={() => setPaso(2)}
+            disabled={!parsed || !tipoCambioNum || tipoCambioNum <= 0}
+            className="w-full"
+          >
+            Continuar — clasificar audiencias
+          </Button>
+        </>
       )}
 
-      {parsed && (
-        <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm space-y-1">
-          <p className="text-text-primary font-medium">Detectado ({parsed.filasDetectadas} fila{parsed.filasDetectadas !== 1 ? 's' : ''}):</p>
-          <p className="text-text-secondary">Gasto: USD {parsed.gastoUsd.toLocaleString('es-AR')}</p>
-          {parsed.alcance != null && <p className="text-text-secondary">Alcance: {parsed.alcance.toLocaleString('es-AR')}</p>}
-          {parsed.impresiones != null && <p className="text-text-secondary">Impresiones: {parsed.impresiones.toLocaleString('es-AR')}</p>}
-          {parsed.clics != null && <p className="text-text-secondary">Clics: {parsed.clics.toLocaleString('es-AR')}</p>}
-          {parsed.resultados != null && <p className="text-text-secondary">Resultados: {parsed.resultados.toLocaleString('es-AR')}</p>}
-        </div>
+      {/* ── Paso 2: clasificar conjuntos ── */}
+      {paso === 2 && parsed && (
+        <>
+          <div className="rounded-lg border border-border bg-surface-alt p-3 text-sm space-y-0.5">
+            <p className="text-text-primary font-medium">Resumen a importar</p>
+            <p className="text-text-secondary">
+              USD {parsed.gastoUsd.toLocaleString('es-AR')} × ${tipoCambioNum} ={' '}
+              <span className="font-medium text-text-primary">{gastoArs != null ? formatARS(gastoArs) : '—'}</span>
+            </p>
+          </div>
+
+          {parsed.conjuntosDetectados.length === 0 ? (
+            <p className="text-sm text-text-muted bg-surface-alt rounded-lg px-3 py-2">
+              No se detectaron conjuntos con actividad. Se importarán solo los totales.
+            </p>
+          ) : (
+            <div className="space-y-3">
+              <p className="text-sm font-medium text-text-primary">
+                Tipo de audiencia por conjunto de anuncios:
+              </p>
+              {parsed.conjuntosDetectados.map((conjunto) => (
+                <div key={conjunto} className="rounded-lg border border-border bg-surface p-3">
+                  <p className="text-sm font-medium text-text-primary mb-2">{conjunto}</p>
+                  <div className="flex gap-4">
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm text-text-secondary">
+                      <input
+                        type="radio"
+                        name={`tipo-${conjunto}`}
+                        value="caliente"
+                        checked={tipoAudienciaMap[conjunto] === 'caliente'}
+                        onChange={() => setTipoAudienciaMap((m) => ({ ...m, [conjunto]: 'caliente' }))}
+                        className="accent-brand"
+                      />
+                      Caliente (seguidores / compradores)
+                    </label>
+                    <label className="flex items-center gap-1.5 cursor-pointer text-sm text-text-secondary">
+                      <input
+                        type="radio"
+                        name={`tipo-${conjunto}`}
+                        value="fría"
+                        checked={tipoAudienciaMap[conjunto] === 'fría'}
+                        onChange={() => setTipoAudienciaMap((m) => ({ ...m, [conjunto]: 'fría' }))}
+                        className="accent-brand"
+                      />
+                      Fría (audiencia nueva)
+                    </label>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {parsed.conjuntosDetectados.length > 0 && !todasClasificadas && (
+            <p className="text-xs text-text-muted">
+              Clasificá todos los conjuntos para continuar.
+            </p>
+          )}
+
+          <div className="flex flex-col gap-2">
+            <Button
+              onClick={handleConfirmar}
+              disabled={pending || (parsed.conjuntosDetectados.length > 0 && !todasClasificadas)}
+              className="w-full"
+            >
+              {pending ? 'Importando...' : 'Confirmar importación'}
+            </Button>
+            <button
+              onClick={() => setPaso(1)}
+              disabled={pending}
+              className="text-sm text-text-muted underline underline-offset-2 hover:no-underline"
+            >
+              ← Volver
+            </button>
+          </div>
+        </>
       )}
 
-      <Field label="Tipo de cambio del día" hint="Ej: 1250">
-        <Input
-          type="number"
-          min="0"
-          step="0.01"
-          value={tipoCambio}
-          onChange={(e) => setTipoCambio(e.target.value)}
-          placeholder="1250"
-        />
-      </Field>
-
-      {gastoArs != null && (
-        <p className="text-sm text-text-primary">
-          Se va a cargar como gasto de publicidad: <span className="font-semibold">{formatARS(gastoArs)}</span>
-        </p>
-      )}
-
-      <Button
-        onClick={handleConfirmar}
-        disabled={pending || !parsed || !tipoCambioNum || tipoCambioNum <= 0}
-        className="w-full"
-      >
-        {pending ? 'Importando...' : 'Confirmar importación'}
-      </Button>
+      <Toast />
     </div>
   );
 }

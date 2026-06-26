@@ -1,10 +1,20 @@
-// Parser de reportes CSV de Meta Ads Manager. CSV puro, sin dependencias
-// (mismo criterio que la exportación de CSV ya usada en el dashboard) —
-// evita los problemas de hidratación que tuvo SheetJS con imports dinámicos.
+// Parser de reportes CSV de Meta Ads Manager. CSV puro, sin dependencias.
 //
-// El nombre exacto de las columnas varía según idioma de la cuenta y qué
-// columnas eligió exportar el usuario, así que se busca por nombre con
-// múltiples candidatos, igual que findColumn() en pedix-parser.ts.
+// El nombre exacto de las columnas varía según idioma de la cuenta, así que
+// se busca por nombre con múltiples candidatos (igual que pedix-parser.ts).
+
+export type MetaAdsFilaDetalle = {
+  nombreCampana: string;
+  nombreConjunto: string;
+  nombreAnuncio: string;
+  gastoUsd: number;
+  alcance: number | null;
+  impresiones: number | null;
+  conversaciones: number | null;
+  costoResultadoUsd: number | null;
+  ctrEnlace: number | null;
+  clicsEnlace: number | null;
+};
 
 export type MetaAdsParseResult = {
   gastoUsd: number;
@@ -13,14 +23,22 @@ export type MetaAdsParseResult = {
   clics: number | null;
   resultados: number | null;
   filasDetectadas: number;
+  filas: MetaAdsFilaDetalle[];
+  conjuntosDetectados: string[];
 };
 
-const CANDIDATOS: Record<'gasto' | 'alcance' | 'impresiones' | 'clics' | 'resultados', string[]> = {
-  gasto: ['amount spent (usd)', 'importe gastado (usd)', 'amount spent', 'importe gastado'],
-  alcance: ['reach', 'alcance'],
-  impresiones: ['impressions', 'impresiones'],
-  clics: ['link clicks', 'clicks (all)', 'clics en el enlace', 'clics (todos)', 'clicks', 'clics'],
-  resultados: ['results', 'resultados'],
+const CANDIDATOS: Record<string, string[]> = {
+  gasto:         ['amount spent (usd)', 'importe gastado (usd)', 'amount spent', 'importe gastado'],
+  alcance:       ['reach', 'alcance'],
+  impresiones:   ['impressions', 'impresiones'],
+  clics:         ['link clicks', 'clics en el enlace', 'clicks (all)', 'clics (todos)', 'clicks', 'clics'],
+  resultados:    ['results', 'resultados'],
+  conjunto:      ['nombre del conjunto de anuncios', 'ad set name', 'adset name'],
+  campana:       ['nombre de la campaña', 'nombre de la campana', 'campaign name'],
+  anuncio:       ['nombre del anuncio', 'ad name'],
+  costoResultado:['coste por resultados', 'cost per result', 'coste por resultado'],
+  ctr:           ['ctr (tasa de clics en el enlace)', 'ctr (link click-through rate)', 'link ctr'],
+  clicsEnlace:   ['clics en el enlace', 'link clicks'],
 };
 
 function detectarDelimitador(headerLine: string): string {
@@ -93,6 +111,13 @@ function parseNumeroFlexible(raw: string): number {
   return Number.isFinite(n) ? n : 0;
 }
 
+function parseNumeroOpcional(raw: string): number | null {
+  const s = (raw || '').trim();
+  if (!s) return null;
+  const n = parseNumeroFlexible(raw);
+  return n === 0 ? null : n;
+}
+
 export function parseMetaAdsCsv(texto: string): MetaAdsParseResult {
   const lineas = texto.split(/\r\n|\r|\n/).filter((l) => l.trim().length > 0);
   if (lineas.length < 2) {
@@ -109,10 +134,17 @@ export function parseMetaAdsCsv(texto: string): MetaAdsParseResult {
       'No encontré la columna de gasto (esperaba algo como "Amount spent (USD)" o "Importe gastado (USD)"). Revisá que el CSV sea un export de Meta Ads Manager.'
     );
   }
-  const idxAlcance = findColumn(headers, CANDIDATOS.alcance);
-  const idxImpresiones = findColumn(headers, CANDIDATOS.impresiones);
-  const idxClics = findColumn(headers, CANDIDATOS.clics);
-  const idxResultados = findColumn(headers, CANDIDATOS.resultados);
+
+  const idxAlcance      = findColumn(headers, CANDIDATOS.alcance);
+  const idxImpresiones  = findColumn(headers, CANDIDATOS.impresiones);
+  const idxClics        = findColumn(headers, CANDIDATOS.clics);
+  const idxResultados   = findColumn(headers, CANDIDATOS.resultados);
+  const idxConjunto     = findColumn(headers, CANDIDATOS.conjunto);
+  const idxCampana      = findColumn(headers, CANDIDATOS.campana);
+  const idxAnuncio      = findColumn(headers, CANDIDATOS.anuncio);
+  const idxCostoRes     = findColumn(headers, CANDIDATOS.costoResultado);
+  const idxCtr          = findColumn(headers, CANDIDATOS.ctr);
+  const idxClicsEnlace  = findColumn(headers, CANDIDATOS.clicsEnlace);
 
   let gastoUsd = 0;
   let alcance = 0;
@@ -121,16 +153,42 @@ export function parseMetaAdsCsv(texto: string): MetaAdsParseResult {
   let resultados = 0;
   let filasDetectadas = 0;
 
+  const filas: MetaAdsFilaDetalle[] = [];
+  const conjuntosVistos = new Set<string>();
+
   for (let i = 1; i < lineas.length; i++) {
     const fila = parseLineaCsv(lineas[i], delimitador);
     if (fila.every((c) => !c.trim())) continue;
 
-    gastoUsd += parseNumeroFlexible(fila[idxGasto]);
-    if (idxAlcance !== -1) alcance += parseNumeroFlexible(fila[idxAlcance]);
+    const gastoFila = parseNumeroFlexible(fila[idxGasto]);
+    const convFila  = idxResultados !== -1 ? parseNumeroOpcional(fila[idxResultados]) : null;
+
+    gastoUsd    += gastoFila;
+    if (idxAlcance !== -1)     alcance     += parseNumeroFlexible(fila[idxAlcance]);
     if (idxImpresiones !== -1) impresiones += parseNumeroFlexible(fila[idxImpresiones]);
-    if (idxClics !== -1) clics += parseNumeroFlexible(fila[idxClics]);
-    if (idxResultados !== -1) resultados += parseNumeroFlexible(fila[idxResultados]);
+    if (idxClics !== -1)       clics       += parseNumeroFlexible(fila[idxClics]);
+    if (idxResultados !== -1)  resultados  += parseNumeroFlexible(fila[idxResultados]);
     filasDetectadas++;
+
+    // Guardar detalle solo si la fila tiene actividad real
+    if (gastoFila > 0 || (convFila !== null && convFila > 0)) {
+      const nombreConjunto = idxConjunto !== -1 ? (fila[idxConjunto] || '').trim() : '';
+      if (!nombreConjunto) continue;
+
+      filas.push({
+        nombreCampana:    idxCampana    !== -1 ? (fila[idxCampana]   || '').trim() : '',
+        nombreConjunto,
+        nombreAnuncio:    idxAnuncio    !== -1 ? (fila[idxAnuncio]   || '').trim() : '',
+        gastoUsd:         gastoFila,
+        alcance:          idxAlcance     !== -1 ? (parseNumeroFlexible(fila[idxAlcance]) || null) : null,
+        impresiones:      idxImpresiones !== -1 ? (parseNumeroFlexible(fila[idxImpresiones]) || null) : null,
+        conversaciones:   convFila,
+        costoResultadoUsd: idxCostoRes  !== -1 ? parseNumeroOpcional(fila[idxCostoRes]) : null,
+        ctrEnlace:        idxCtr         !== -1 ? parseNumeroOpcional(fila[idxCtr])     : null,
+        clicsEnlace:      idxClicsEnlace !== -1 ? (parseNumeroFlexible(fila[idxClicsEnlace]) || null) : null,
+      });
+      conjuntosVistos.add(nombreConjunto);
+    }
   }
 
   if (filasDetectadas === 0) {
@@ -138,11 +196,13 @@ export function parseMetaAdsCsv(texto: string): MetaAdsParseResult {
   }
 
   return {
-    gastoUsd: Math.round(gastoUsd * 100) / 100,
-    alcance: idxAlcance !== -1 ? Math.round(alcance) : null,
+    gastoUsd:    Math.round(gastoUsd * 100) / 100,
+    alcance:     idxAlcance     !== -1 ? Math.round(alcance)     : null,
     impresiones: idxImpresiones !== -1 ? Math.round(impresiones) : null,
-    clics: idxClics !== -1 ? Math.round(clics) : null,
-    resultados: idxResultados !== -1 ? Math.round(resultados) : null,
+    clics:       idxClics       !== -1 ? Math.round(clics)       : null,
+    resultados:  idxResultados  !== -1 ? Math.round(resultados)  : null,
     filasDetectadas,
+    filas,
+    conjuntosDetectados: Array.from(conjuntosVistos),
   };
 }
