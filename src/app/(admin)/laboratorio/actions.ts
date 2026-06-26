@@ -496,6 +496,15 @@ export async function generarRecomendaciones(desde: string, hasta: string) {
     return { error: 'La IA no devolvió un resultado con el formato esperado. Probá de nuevo.' };
   }
 
+  // Borrar sugeridas anteriores del período antes de insertar las nuevas.
+  // Las decididas y evaluadas nunca se tocan.
+  const { error: errorBorrado } = await supabase
+    .from('decisiones_laboratorio')
+    .delete()
+    .eq('periodo_desde', desde)
+    .eq('estado', 'sugerida');
+  if (errorBorrado) return { error: errorBorrado.message };
+
   const filas = parsed.recomendaciones.map((r) => ({
     periodo_desde: desde,
     periodo_hasta: hasta,
