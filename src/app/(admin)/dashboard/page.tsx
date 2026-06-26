@@ -2472,7 +2472,7 @@ export default function DashboardPage() {
       ) : kpis ? (
         <div className={loading ? 'space-y-6 opacity-60 transition-opacity' : 'space-y-6'}>
           {/* ── Zona 1: Resultado rápido ───────────────────────────── */}
-          <div data-print="section" className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+          <div data-print="section" className="grid grid-cols-2 gap-4 sm:grid-cols-3">
             <KpiCardHero titulo="Ventas" valor={formatARS(kpis.actual.ventas)}>
               <Delta actual={kpis.actual.ventas} anterior={kpis.anterior?.ventas ?? null} />
             </KpiCardHero>
@@ -2505,6 +2505,25 @@ export default function DashboardPage() {
               ) : (
                 <Delta actual={kpis.actual.roas} anterior={kpis.anterior?.roas ?? null} />
               )}
+            </KpiCardHero>
+            <KpiCardHero
+              titulo="Clientes que volvieron"
+              valor={kpis.actual.pedidosRepetidores.toString()}
+            >
+              <Delta
+                actual={kpis.actual.pedidosRepetidores}
+                anterior={kpis.anterior?.pedidosRepetidores ?? null}
+              />
+            </KpiCardHero>
+            <KpiCardHero
+              titulo="% facturación repetidores"
+              valor={formatPercent(kpis.actual.pctVentasRepetidores)}
+            >
+              <Delta
+                actual={kpis.actual.pctVentasRepetidores}
+                anterior={kpis.anterior?.pctVentasRepetidores ?? null}
+                esPuntoPorcentual
+              />
             </KpiCardHero>
           </div>
 
