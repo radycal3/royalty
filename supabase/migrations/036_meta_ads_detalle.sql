@@ -14,8 +14,8 @@ CREATE TABLE IF NOT EXISTS meta_ads_detalle (
   alcance                 INTEGER,
   impresiones             INTEGER,
   conversaciones          INTEGER,
-  costo_por_resultado_usd NUMERIC(10, 4),
-  ctr_enlace              NUMERIC(8, 6),
+  costo_por_resultado_usd NUMERIC,
+  ctr_enlace              NUMERIC,
   clics_enlace            INTEGER,
   created_at              TIMESTAMPTZ DEFAULT now()
 );
