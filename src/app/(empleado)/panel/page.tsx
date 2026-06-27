@@ -147,6 +147,19 @@ function textoQuejas(quejasCalidad: number | null, detalle: QuejaItem[]): string
   return '—';
 }
 
+function textoError(m: MetricasEquipoSemana): string {
+  const totalErrores =
+    m.faltantesDetalle.length > 0 || m.quejasDetalle.length > 0
+      ? m.faltantesDetalle.length + m.quejasDetalle.length
+      : (m.quejasFaltantes ?? 0) + (m.quejasCalidad ?? 0);
+
+  if (m.pedidosEnPeriodo == null || m.pedidosEnPeriodo === 0) {
+    return totalErrores > 0 ? `${totalErrores} errores` : '—';
+  }
+  const pct = ((totalErrores / m.pedidosEnPeriodo) * 100).toFixed(1);
+  return `${pct}% de pedidos con error (${totalErrores} de ${m.pedidosEnPeriodo})`;
+}
+
 function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] }) {
   const conDatos = metricas.filter((m) =>
     m.mensajesRecibidos != null || m.mensajesConvertidos != null ||
@@ -169,6 +182,7 @@ function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] })
             <th className="pb-2 text-right font-medium px-3">T. producción</th>
             <th className="pb-2 font-medium pl-4">Faltantes</th>
             <th className="pb-2 font-medium pl-4">Quejas de calidad</th>
+            <th className="pb-2 font-medium pl-4">% error</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/50">
@@ -191,6 +205,9 @@ function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] })
                 </td>
                 <td className="py-2 pl-4 text-text-primary max-w-xs">
                   {textoQuejas(m.quejasCalidad, m.quejasDetalle)}
+                </td>
+                <td className="py-2 pl-4 text-text-primary whitespace-nowrap">
+                  {textoError(m)}
                 </td>
               </tr>
             );

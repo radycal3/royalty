@@ -477,6 +477,7 @@ function TabMetricasEquipo() {
         productos={productos}
         periodoDesde={periodo.viernes}
         periodoHasta={periodo.fechaHasta}
+        pedidosEnPeriodo={metricas?.pedidosEnPeriodo ?? null}
         onGuardar={handleGuardar}
         pending={pending}
       />
@@ -496,6 +497,7 @@ function FormMetricas({
   productos,
   periodoDesde,
   periodoHasta,
+  pedidosEnPeriodo,
   onGuardar,
   pending,
 }: {
@@ -503,6 +505,7 @@ function FormMetricas({
   productos: ProductoCatalogo[];
   periodoDesde: string;
   periodoHasta: string;
+  pedidosEnPeriodo: number | null;
   onGuardar: (data: GuardarInput) => void;
   pending: boolean;
 }) {
@@ -748,6 +751,22 @@ function FormMetricas({
           </p>
         )}
       </div>
+
+      {/* % pedidos con error — calculado en tiempo real desde el estado del form */}
+      {pedidosEnPeriodo != null && pedidosEnPeriodo > 0 && (() => {
+        const totalErrores =
+          faltantes.filter((f) => f.productoId && f.cantidad > 0).length +
+          quejas.filter((q) => q.descripcion.trim() !== '').length;
+        const pct = ((totalErrores / pedidosEnPeriodo) * 100).toFixed(1);
+        return (
+          <div className="rounded-lg bg-surface border border-border px-4 py-3 text-sm">
+            <span className="text-text-muted">Pedidos con error: </span>
+            <span className="font-semibold text-text-primary">
+              {pct}% ({totalErrores} de {pedidosEnPeriodo})
+            </span>
+          </div>
+        );
+      })()}
 
       <Button type="submit" disabled={pending} className="w-full">
         {pending ? 'Guardando...' : 'Guardar métricas'}

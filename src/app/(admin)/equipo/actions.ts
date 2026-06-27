@@ -172,9 +172,10 @@ export type MetricasEquipoSemana = {
   quejasCalidad: number | null;
   faltantesDetalle: FaltanteItem[];
   quejasDetalle: QuejaItem[];
+  pedidosEnPeriodo: number | null;
 };
 
-function mapMetrica(d: any): MetricasEquipoSemana {
+function mapMetrica(d: any, pedidosEnPeriodo: number | null = null): MetricasEquipoSemana {
   return {
     periodoDesde: d.periodo_desde,
     periodoHasta: d.periodo_hasta,
@@ -192,7 +193,13 @@ function mapMetrica(d: any): MetricasEquipoSemana {
     quejasDetalle: (d.metricas_quejas_detalle ?? []).map((q: any) => ({
       descripcion: q.descripcion,
     })),
+    pedidosEnPeriodo,
   };
+}
+
+async function fetchImpIds(supabase: Awaited<ReturnType<typeof createClient>>): Promise<string[]> {
+  const { data } = await supabase.from('importaciones').select('id').eq('estado', 'activa');
+  return (data ?? []).map((i: any) => i.id as string);
 }
 
 const METRICA_SELECT = '*, metricas_faltantes_detalle(*), metricas_quejas_detalle(*)';
@@ -211,7 +218,19 @@ export async function obtenerMetricasPeriodo(periodoDesde: string): Promise<Metr
   if (error) throw new Error(`Error al obtener métricas: ${error.message}`);
   if (!data) return null;
 
-  return mapMetrica(data);
+  const impIds = await fetchImpIds(supabase);
+  let pedidosEnPeriodo: number | null = null;
+  if (impIds.length > 0) {
+    const { count } = await supabase
+      .from('pedidos')
+      .select('id', { count: 'exact', head: true })
+      .gte('fecha', data.periodo_desde)
+      .lte('fecha', data.periodo_hasta)
+      .in('importacion_id', impIds);
+    pedidosEnPeriodo = count ?? 0;
+  }
+
+  return mapMetrica(data, pedidosEnPeriodo);
 }
 
 export async function guardarMetricasPeriodo(input: {
@@ -357,5 +376,36 @@ export async function obtenerMetricasHistorico(n: number = 8): Promise<MetricasE
 
   if (error) throw new Error(`Error al obtener histórico: ${error.message}`);
 
-  return (data || []).map(mapMetrica).reverse();
+  const rawRows = data || [];
+  if (rawRows.length === 0) return [];
+
+  // Una query de importaciones + una de pedidos para todos los períodos
+  const impIds = await fetchImpIds(supabase);
+  const pedidosCountByPeriodo: Record<string, number> = {};
+
+  if (impIds.length > 0) {
+    const minDate = rawRows[rawRows.length - 1].periodo_desde; // más antiguo (orden DESC)
+    const maxDate = rawRows[0].periodo_hasta;                   // más nuevo
+
+    const { data: pedidosData } = await supabase
+      .from('pedidos')
+      .select('fecha')
+      .gte('fecha', minDate)
+      .lte('fecha', maxDate)
+      .in('importacion_id', impIds);
+
+    for (const r of rawRows) pedidosCountByPeriodo[r.periodo_desde] = 0;
+    for (const p of pedidosData ?? []) {
+      for (const r of rawRows) {
+        if (p.fecha >= r.periodo_desde && p.fecha <= r.periodo_hasta) {
+          pedidosCountByPeriodo[r.periodo_desde]++;
+          break;
+        }
+      }
+    }
+  }
+
+  return rawRows
+    .map((d) => mapMetrica(d, pedidosCountByPeriodo[d.periodo_desde] ?? null))
+    .reverse();
 }
