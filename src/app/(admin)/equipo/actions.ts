@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -197,8 +198,11 @@ function mapMetrica(d: any, pedidosEnPeriodo: number | null = null): MetricasEqu
   };
 }
 
-async function fetchImpIds(supabase: Awaited<ReturnType<typeof createClient>>): Promise<string[]> {
-  const { data } = await supabase.from('importaciones').select('id').eq('estado', 'activa');
+// Admin client bypasa RLS — empleados no tienen acceso a importaciones/pedidos.
+// El auth del caller ya fue verificado con createClient() antes de llamar a esto.
+async function fetchImpIds(): Promise<string[]> {
+  const admin = createAdminClient();
+  const { data } = await admin.from('importaciones').select('id').eq('estado', 'activa');
   return (data ?? []).map((i: any) => i.id as string);
 }
 
@@ -218,10 +222,11 @@ export async function obtenerMetricasPeriodo(periodoDesde: string): Promise<Metr
   if (error) throw new Error(`Error al obtener métricas: ${error.message}`);
   if (!data) return null;
 
-  const impIds = await fetchImpIds(supabase);
+  const impIds = await fetchImpIds();
   let pedidosEnPeriodo: number | null = null;
   if (impIds.length > 0) {
-    const { count } = await supabase
+    const admin = createAdminClient();
+    const { count } = await admin
       .from('pedidos')
       .select('id', { count: 'exact', head: true })
       .gte('fecha', data.periodo_desde)
@@ -379,15 +384,17 @@ export async function obtenerMetricasHistorico(n: number = 8): Promise<MetricasE
   const rawRows = data || [];
   if (rawRows.length === 0) return [];
 
-  // Una query de importaciones + una de pedidos para todos los períodos
-  const impIds = await fetchImpIds(supabase);
+  // Una query de importaciones + una de pedidos para todos los períodos.
+  // Admin client porque empleados no tienen RLS sobre importaciones/pedidos.
+  const impIds = await fetchImpIds();
   const pedidosCountByPeriodo: Record<string, number> = {};
 
   if (impIds.length > 0) {
+    const admin = createAdminClient();
     const minDate = rawRows[rawRows.length - 1].periodo_desde; // más antiguo (orden DESC)
     const maxDate = rawRows[0].periodo_hasta;                   // más nuevo
 
-    const { data: pedidosData } = await supabase
+    const { data: pedidosData } = await admin
       .from('pedidos')
       .select('fecha')
       .gte('fecha', minDate)
