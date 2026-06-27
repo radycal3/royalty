@@ -15,6 +15,23 @@ export type Miembro = {
   created_at: string;
 };
 
+export type FaltanteItem = {
+  productoId: string;
+  productoNombre: string;
+  cantidad: number;
+  precioUnitarioVenta: number;
+};
+
+export type QuejaItem = {
+  descripcion: string;
+};
+
+export type ProductoCatalogo = {
+  id: string;
+  nombre: string;
+  precioVigente: number | null;
+};
+
 // ─── Listar miembros ───────────────────────────────────────────────────────
 
 export async function obtenerEquipo(): Promise<Miembro[]> {
@@ -105,8 +122,45 @@ export async function toggleActivoMiembro(id: string, activo: boolean) {
   return { success: true };
 }
 
+// ─── Catálogo de productos con precio vigente ───────────────────────────────
+
+export async function obtenerProductosCatalogo(): Promise<ProductoCatalogo[]> {
+  const supabase = await createClient();
+  const { data: user } = await supabase.auth.getUser();
+  if (!user.user) throw new Error('No autenticado');
+
+  const hoy = new Date().toISOString().split('T')[0];
+
+  const { data: productos, error } = await supabase
+    .from('productos')
+    .select('id, nombre')
+    .eq('activo', true)
+    .order('nombre');
+
+  if (error) throw new Error(`Error al obtener productos: ${error.message}`);
+
+  const { data: precios } = await supabase
+    .from('productos_precios')
+    .select('producto_id, precio, fecha_vigencia, created_at')
+    .lte('fecha_vigencia', hoy)
+    .order('fecha_vigencia', { ascending: false })
+    .order('created_at', { ascending: false });
+
+  const precioVigente: Record<string, number> = {};
+  for (const p of precios ?? []) {
+    if (!(p.producto_id in precioVigente)) {
+      precioVigente[p.producto_id] = p.precio;
+    }
+  }
+
+  return (productos ?? []).map((p) => ({
+    id: p.id,
+    nombre: p.nombre,
+    precioVigente: precioVigente[p.id] ?? null,
+  }));
+}
+
 // ─── Métricas semanales del equipo ──────────────────────────────────────────
-// Carga manual del admin. Sin ningún campo en pesos.
 
 export type MetricasEquipoSemana = {
   periodoDesde: string;
@@ -116,7 +170,32 @@ export type MetricasEquipoSemana = {
   tiempoPromedioProduccionMin: number | null;
   quejasFaltantes: number | null;
   quejasCalidad: number | null;
+  faltantesDetalle: FaltanteItem[];
+  quejasDetalle: QuejaItem[];
 };
+
+function mapMetrica(d: any): MetricasEquipoSemana {
+  return {
+    periodoDesde: d.periodo_desde,
+    periodoHasta: d.periodo_hasta,
+    mensajesRecibidos: d.mensajes_recibidos,
+    mensajesConvertidos: d.mensajes_convertidos,
+    tiempoPromedioProduccionMin: d.tiempo_promedio_produccion_min,
+    quejasFaltantes: d.quejas_faltantes,
+    quejasCalidad: d.quejas_calidad,
+    faltantesDetalle: (d.metricas_faltantes_detalle ?? []).map((f: any) => ({
+      productoId: f.producto_id,
+      productoNombre: f.producto_nombre,
+      cantidad: f.cantidad,
+      precioUnitarioVenta: f.precio_unitario_venta,
+    })),
+    quejasDetalle: (d.metricas_quejas_detalle ?? []).map((q: any) => ({
+      descripcion: q.descripcion,
+    })),
+  };
+}
+
+const METRICA_SELECT = '*, metricas_faltantes_detalle(*), metricas_quejas_detalle(*)';
 
 export async function obtenerMetricasPeriodo(periodoDesde: string): Promise<MetricasEquipoSemana | null> {
   const supabase = await createClient();
@@ -125,22 +204,14 @@ export async function obtenerMetricasPeriodo(periodoDesde: string): Promise<Metr
 
   const { data, error } = await supabase
     .from('metricas_equipo_semana')
-    .select('*')
+    .select(METRICA_SELECT)
     .eq('periodo_desde', periodoDesde)
     .maybeSingle();
 
   if (error) throw new Error(`Error al obtener métricas: ${error.message}`);
   if (!data) return null;
 
-  return {
-    periodoDesde: data.periodo_desde,
-    periodoHasta: data.periodo_hasta,
-    mensajesRecibidos: data.mensajes_recibidos,
-    mensajesConvertidos: data.mensajes_convertidos,
-    tiempoPromedioProduccionMin: data.tiempo_promedio_produccion_min,
-    quejasFaltantes: data.quejas_faltantes,
-    quejasCalidad: data.quejas_calidad,
-  };
+  return mapMetrica(data);
 }
 
 export async function guardarMetricasPeriodo(input: {
@@ -149,14 +220,68 @@ export async function guardarMetricasPeriodo(input: {
   mensajesRecibidos: number | null;
   mensajesConvertidos: number | null;
   tiempoPromedioProduccionMin: number | null;
-  quejasFaltantes: number | null;
-  quejasCalidad: number | null;
+  faltantesInput: { productoId: string; cantidad: number }[];
+  quejasInput: string[];
 }) {
   const supabase = await createClient();
-  const { data: user } = await supabase.auth.getUser();
-  if (!user.user) throw new Error('No autenticado');
+  const { data: authData } = await supabase.auth.getUser();
+  if (!authData.user) throw new Error('No autenticado');
 
-  const { error } = await supabase
+  const hoy = new Date().toISOString().split('T')[0];
+
+  // Congelar nombre y precio de venta al momento de guardar
+  type FaltanteCongelado = {
+    producto_id: string;
+    producto_nombre: string;
+    cantidad: number;
+    precio_unitario_venta: number;
+  };
+  const faltantesCongelados: FaltanteCongelado[] = [];
+
+  if (input.faltantesInput.length > 0) {
+    const productoIds = input.faltantesInput.map((f) => f.productoId);
+
+    const { data: productosData, error: prodError } = await supabase
+      .from('productos')
+      .select('id, nombre')
+      .in('id', productoIds);
+
+    if (prodError) return { error: `Error al obtener productos: ${prodError.message}` };
+
+    const nombrePorId: Record<string, string> = {};
+    for (const p of productosData ?? []) nombrePorId[p.id] = p.nombre;
+
+    const { data: preciosData, error: precError } = await supabase
+      .from('productos_precios')
+      .select('producto_id, precio, fecha_vigencia, created_at')
+      .in('producto_id', productoIds)
+      .lte('fecha_vigencia', hoy)
+      .order('fecha_vigencia', { ascending: false })
+      .order('created_at', { ascending: false });
+
+    if (precError) return { error: `Error al obtener precios: ${precError.message}` };
+
+    const precioPorId: Record<string, number> = {};
+    for (const p of preciosData ?? []) {
+      if (!(p.producto_id in precioPorId)) precioPorId[p.producto_id] = p.precio;
+    }
+
+    for (const f of input.faltantesInput) {
+      const nombre = nombrePorId[f.productoId] ?? f.productoId;
+      if (!(f.productoId in precioPorId)) {
+        return { error: `El producto "${nombre}" no tiene precio vigente` };
+      }
+      faltantesCongelados.push({
+        producto_id: f.productoId,
+        producto_nombre: nombre,
+        cantidad: f.cantidad,
+        precio_unitario_venta: precioPorId[f.productoId],
+      });
+    }
+  }
+
+  // Upsert de métricas base, obteniendo el id para el detalle
+  const { data: metricaData, error: upsertError } = await supabase
     .from('metricas_equipo_semana')
     .upsert(
       {
@@ -165,14 +290,57 @@ export async function guardarMetricasPeriodo(input: {
         mensajes_recibidos: input.mensajesRecibidos,
         mensajes_convertidos: input.mensajesConvertidos,
         tiempo_promedio_produccion_min: input.tiempoPromedioProduccionMin,
-        quejas_faltantes: input.quejasFaltantes,
-        quejas_calidad: input.quejasCalidad,
-        registrado_por: user.user.id,
+        quejas_faltantes: input.faltantesInput.length > 0 ? input.faltantesInput.length : null,
+        quejas_calidad: input.quejasInput.length > 0 ? input.quejasInput.length : null,
+        registrado_por: authData.user.id,
       },
       { onConflict: 'periodo_desde' }
-    );
+    )
+    .select('id')
+    .single();
 
-  if (error) return { error: error.message };
+  if (upsertError) return { error: upsertError.message };
+  const metricaId = metricaData.id;
+
+  // Reemplazar detalle de faltantes (delete + insert)
+  const { error: delFaltErr } = await supabase
+    .from('metricas_faltantes_detalle')
+    .delete()
+    .eq('metrica_id', metricaId);
+  if (delFaltErr) return { error: delFaltErr.message };
+
+  if (faltantesCongelados.length > 0) {
+    const { error: insFaltErr } = await supabase
+      .from('metricas_faltantes_detalle')
+      .insert(
+        faltantesCongelados.map((f) => ({
+          metrica_id: metricaId,
+          periodo_desde: input.periodoDesde,
+          ...f,
+        }))
+      );
+    if (insFaltErr) return { error: insFaltErr.message };
+  }
+
+  // Reemplazar detalle de quejas (delete + insert)
+  const { error: delQuejaErr } = await supabase
+    .from('metricas_quejas_detalle')
+    .delete()
+    .eq('metrica_id', metricaId);
+  if (delQuejaErr) return { error: delQuejaErr.message };
+
+  if (input.quejasInput.length > 0) {
+    const { error: insQuejaErr } = await supabase
+      .from('metricas_quejas_detalle')
+      .insert(
+        input.quejasInput.map((desc) => ({
+          metrica_id: metricaId,
+          descripcion: desc,
+        }))
+      );
+    if (insQuejaErr) return { error: insQuejaErr.message };
+  }
+
   return { success: true };
 }
 
@@ -183,21 +351,11 @@ export async function obtenerMetricasHistorico(n: number = 8): Promise<MetricasE
 
   const { data, error } = await supabase
     .from('metricas_equipo_semana')
-    .select('*')
+    .select(METRICA_SELECT)
     .order('periodo_desde', { ascending: false })
     .limit(n);
 
   if (error) throw new Error(`Error al obtener histórico: ${error.message}`);
 
-  return (data || [])
-    .map((d: any) => ({
-      periodoDesde: d.periodo_desde,
-      periodoHasta: d.periodo_hasta,
-      mensajesRecibidos: d.mensajes_recibidos,
-      mensajesConvertidos: d.mensajes_convertidos,
-      tiempoPromedioProduccionMin: d.tiempo_promedio_produccion_min,
-      quejasFaltantes: d.quejas_faltantes,
-      quejasCalidad: d.quejas_calidad,
-    }))
-    .reverse();
+  return (data || []).map(mapMetrica).reverse();
 }

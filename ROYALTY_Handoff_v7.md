@@ -75,6 +75,8 @@ Los empleados solo ven lo que Lucas decide mostrarles. Nunca ven montos en pesos
 
 **Defensa en profundidad:** el dato financiero completo se calcula server-side y se reduce a `{ pedidos, margenNeto }` antes de que la respuesta salga del server action. `decisiones_laboratorio`, `meta_ads_importaciones` y `meta_ads_detalle` son admin-only a nivel RLS.
 
+**Excepción deliberada — precio de venta en faltantes:** `metricas_faltantes_detalle.precio_unitario_venta` es el precio de venta al cliente (de `productos_precios`), no el costo interno. Tanto admin como empleado lo ven en la tabla de métricas (formato: "Royal Doble x2 ($84.000)"). No viola el principio porque es un precio público que no revela márgenes ni estructura de costos internos. Congelado al momento de registrar, igual que los demás valores del sistema.
+
 **Panel de empleados (ACTUALIZADO esta sesión):** se eliminó el contador de hamburguesas vendidas. La grilla quedó en 2 columnas: Pedidos y Margen neto. El `margenNeto` es el valor real de `calcularKpis` sin modificación.
 
 ### 2.11 Laboratorio: disparo manual, sin generación automática
@@ -181,6 +183,7 @@ const requestIdRef = useRef(0);
 | 035 | `035_meta_ads.sql` | Tabla `meta_ads_importaciones` (una fila por semana, totales de gasto/alcance/clics/resultados). Admin-only | ✅ Aplicado |
 | 036 | `036_meta_ads_detalle.sql` | **NUEVO esta sesión.** Tabla `meta_ads_detalle` (detalle por anuncio/conjunto, con `tipo_audiencia`). ON DELETE CASCADE desde `meta_ads_importaciones`. Admin-only | ✅ Aplicado |
 | 037 | `037_meta_ads_detalle_fix_tipos.sql` | **NUEVO esta sesión.** ALTER TABLE `meta_ads_detalle`: cambia `costo_por_resultado_usd` y `ctr_enlace` de `NUMERIC(n,m)` a `NUMERIC` sin restricción — fix de "numeric field overflow" con valores de muchos decimales del CSV real | ✅ Aplicado |
+| 038 | `038_metricas_detalle.sql` | **NUEVO esta sesión.** Tablas `metricas_faltantes_detalle` (producto + cantidad + precio de venta congelado, ON DELETE CASCADE desde `metricas_equipo_semana`) y `metricas_quejas_detalle` (texto libre). RLS admin-full + empleado-SELECT. | ✅ Aplicado |
 
 ---
 
@@ -233,7 +236,9 @@ const requestIdRef = useRef(0);
 
 ### 5.11 Sistema de empleados
 - **`metas_equipo`** — id, nivel (1-5, UNIQUE), margen_minimo, descripcion, color, activo. RLS: admin full access, empleado SELECT.
-- **`metricas_equipo_semana`** — id, periodo_desde (UNIQUE), periodo_hasta, mensajes_recibidos, mensajes_convertidos, tiempo_promedio_produccion_min, quejas_faltantes, quejas_calidad. Sin ningún campo en pesos.
+- **`metricas_equipo_semana`** — id, periodo_desde (UNIQUE), periodo_hasta, mensajes_recibidos, mensajes_convertidos, tiempo_promedio_produccion_min, quejas_faltantes (derivado del COUNT del detalle), quejas_calidad (ídem). Sin ningún campo en pesos.
+- **`metricas_faltantes_detalle`** — id, metrica_id (FK CASCADE), periodo_desde (denorm), producto_id (FK), producto_nombre (congelado), cantidad, precio_unitario_venta (congelado — precio de venta público, excepción deliberada 2.10). RLS admin-full + empleado-SELECT.
+- **`metricas_quejas_detalle`** — id, metrica_id (FK CASCADE), descripcion TEXT. RLS admin-full + empleado-SELECT.
 
 ### 5.12 Stock
 - **`compras_ingredientes`** — id, fecha, ingrediente_id, cantidad, unidad, costo_total, proveedor, nota, registrado_por. Siempre en `unidad_compra` real.
@@ -686,6 +691,7 @@ No hay una etapa grande sin especificar pendiente. Lo que sigue es operar lo ya 
 | Laboratorio: evaluación automática post-cierre (banner + resumen por código) | ✅ Completo |
 | Importación de Meta Ads (CSV → gasto en ARS + métricas totales) | ✅ Completo |
 | **Detalle de Meta Ads por conjunto con tipo de audiencia caliente/fría** | ✅ **Completo esta sesión** |
+| **Métricas de equipo: faltantes con producto + precio congelado + quejas con texto libre** | ✅ **Completo esta sesión** |
 | **Laboratorio: contexto porConjunto + regla caliente/fría en SYSTEM_PROMPT** | ✅ **Completo esta sesión** |
 | **Dashboard admin: 3 zonas con jerarquía visual (KpiCardHero/ZonaDivisor/SeccionColapsable)** | ✅ **Completo esta sesión** |
 | **Dashboard admin: 6 cards en Zona 1 (+ Clientes que volvieron + % facturación repetidores)** | ✅ **Completo esta sesión** |

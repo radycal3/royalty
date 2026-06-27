@@ -5,8 +5,8 @@ import { ShoppingBag, TrendingUp } from 'lucide-react';
 import { obtenerResumenEmpleado, obtenerMargenHistorico, obtenerMetasEquipo } from './actions';
 import type { ResumenEmpleado, MargenSemana, MetaEquipo } from './actions';
 import { obtenerMetricasHistorico } from '../../(admin)/equipo/actions';
-import type { MetricasEquipoSemana } from '../../(admin)/equipo/actions';
-import { formatDate } from '@/lib/utils/format';
+import type { MetricasEquipoSemana, FaltanteItem, QuejaItem } from '../../(admin)/equipo/actions';
+import { formatDate, formatARS } from '@/lib/utils/format';
 
 const COLOR_BAR: Record<string, string> = {
   gray: '#9ca3af',
@@ -121,10 +121,37 @@ export default function PanelEmpleadoPage() {
   );
 }
 
+function textoFaltantes(quejasFaltantes: number | null, detalle: FaltanteItem[]): string {
+  if (detalle.length > 0) {
+    const items = detalle
+      .map((f) => `${f.productoNombre} x${f.cantidad} (${formatARS(f.precioUnitarioVenta * f.cantidad)})`)
+      .join(', ');
+    const count = detalle.length;
+    return `${count} ${count === 1 ? 'faltante' : 'faltantes'} — ${items}`;
+  }
+  if (quejasFaltantes != null) {
+    return `${quejasFaltantes} ${quejasFaltantes === 1 ? 'faltante' : 'faltantes'}`;
+  }
+  return '—';
+}
+
+function textoQuejas(quejasCalidad: number | null, detalle: QuejaItem[]): string {
+  if (detalle.length > 0) {
+    const textos = detalle.map((q) => q.descripcion).join(', ');
+    const count = detalle.length;
+    return `${count} ${count === 1 ? 'queja' : 'quejas'} — ${textos}`;
+  }
+  if (quejasCalidad != null) {
+    return `${quejasCalidad} ${quejasCalidad === 1 ? 'queja' : 'quejas'}`;
+  }
+  return '—';
+}
+
 function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] }) {
   const conDatos = metricas.filter((m) =>
     m.mensajesRecibidos != null || m.mensajesConvertidos != null ||
-    m.tiempoPromedioProduccionMin != null || m.quejasFaltantes != null || m.quejasCalidad != null
+    m.tiempoPromedioProduccionMin != null || m.quejasFaltantes != null || m.quejasCalidad != null ||
+    m.faltantesDetalle.length > 0 || m.quejasDetalle.length > 0
   );
 
   if (conDatos.length === 0) {
@@ -140,8 +167,8 @@ function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] })
             <th className="pb-2 text-right font-medium">Mensajes</th>
             <th className="pb-2 text-right font-medium">Conversión</th>
             <th className="pb-2 text-right font-medium">T. producción</th>
-            <th className="pb-2 text-right font-medium">Quejas faltantes</th>
-            <th className="pb-2 text-right font-medium">Quejas calidad</th>
+            <th className="pb-2 font-medium pl-4">Faltantes</th>
+            <th className="pb-2 font-medium pl-4">Quejas de calidad</th>
           </tr>
         </thead>
         <tbody className="divide-y divide-border/50">
@@ -151,16 +178,20 @@ function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] })
               : '—';
             return (
               <tr key={m.periodoDesde}>
-                <td className="py-2 text-text-secondary">{formatDate(m.periodoDesde)}</td>
-                <td className="py-2 text-right tabular-nums text-text-primary">
+                <td className="py-2 text-text-secondary whitespace-nowrap">{formatDate(m.periodoDesde)}</td>
+                <td className="py-2 text-right tabular-nums text-text-primary whitespace-nowrap">
                   {m.mensajesRecibidos ?? '—'} → {m.mensajesConvertidos ?? '—'}
                 </td>
                 <td className="py-2 text-right tabular-nums text-text-primary">{tasa}</td>
-                <td className="py-2 text-right tabular-nums text-text-primary">
+                <td className="py-2 text-right tabular-nums text-text-primary whitespace-nowrap">
                   {m.tiempoPromedioProduccionMin != null ? `${m.tiempoPromedioProduccionMin} min` : '—'}
                 </td>
-                <td className="py-2 text-right tabular-nums text-text-primary">{m.quejasFaltantes ?? '—'}</td>
-                <td className="py-2 text-right tabular-nums text-text-primary">{m.quejasCalidad ?? '—'}</td>
+                <td className="py-2 pl-4 text-text-primary max-w-xs">
+                  {textoFaltantes(m.quejasFaltantes, m.faltantesDetalle)}
+                </td>
+                <td className="py-2 pl-4 text-text-primary max-w-xs">
+                  {textoQuejas(m.quejasCalidad, m.quejasDetalle)}
+                </td>
               </tr>
             );
           })}
