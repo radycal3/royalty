@@ -163,10 +163,10 @@ function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] })
       <table className="w-full text-sm">
         <thead>
           <tr className="border-b border-border text-left text-xs text-text-muted">
-            <th className="pb-2 font-medium">Semana</th>
-            <th className="pb-2 text-right font-medium">Mensajes</th>
-            <th className="pb-2 text-right font-medium">Conversión</th>
-            <th className="pb-2 text-right font-medium">T. producción</th>
+            <th className="pb-2 font-medium pr-4">Semana</th>
+            <th className="pb-2 text-right font-medium px-3">Mensajes</th>
+            <th className="pb-2 text-right font-medium px-3">Conversión</th>
+            <th className="pb-2 text-right font-medium px-3">T. producción</th>
             <th className="pb-2 font-medium pl-4">Faltantes</th>
             <th className="pb-2 font-medium pl-4">Quejas de calidad</th>
           </tr>
@@ -178,12 +178,12 @@ function TablaMetricasEquipo({ metricas }: { metricas: MetricasEquipoSemana[] })
               : '—';
             return (
               <tr key={m.periodoDesde}>
-                <td className="py-2 text-text-secondary whitespace-nowrap">{formatDate(m.periodoDesde)}</td>
-                <td className="py-2 text-right tabular-nums text-text-primary whitespace-nowrap">
+                <td className="py-2 pr-4 text-text-secondary whitespace-nowrap">{formatDate(m.periodoDesde)}</td>
+                <td className="py-2 px-3 text-right tabular-nums text-text-primary whitespace-nowrap">
                   {m.mensajesRecibidos ?? '—'} → {m.mensajesConvertidos ?? '—'}
                 </td>
-                <td className="py-2 text-right tabular-nums text-text-primary">{tasa}</td>
-                <td className="py-2 text-right tabular-nums text-text-primary whitespace-nowrap">
+                <td className="py-2 px-3 text-right tabular-nums text-text-primary">{tasa}</td>
+                <td className="py-2 px-3 text-right tabular-nums text-text-primary whitespace-nowrap">
                   {m.tiempoPromedioProduccionMin != null ? `${m.tiempoPromedioProduccionMin} min` : '—'}
                 </td>
                 <td className="py-2 pl-4 text-text-primary max-w-xs">
