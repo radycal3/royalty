@@ -1,7 +1,7 @@
-# ROYALTY — Handoff Técnico Completo v7
-## Fecha: 26 de junio de 2026
+# ROYALTY — Handoff Técnico Completo v8
+## Fecha: 30 de junio de 2026
 
-Sos el nuevo Claude (o Claude Code) que continúa el desarrollo de ROYALTY, el sistema de gestión de Royalty Burgers (Rosario, Argentina). Este documento es la fuente de verdad del proyecto y **reemplaza a ROYALTY_Handoff_v6.md** (eliminado). No tenés acceso al chat anterior — toda la información que necesitás está acá.
+Sos el nuevo Claude (o Claude Code) que continúa el desarrollo de ROYALTY, el sistema de gestión de Royalty Burgers (Rosario, Argentina). Este documento es la fuente de verdad del proyecto y **reemplaza a ROYALTY_Handoff_v7.md** (eliminado). No tenés acceso al chat anterior — toda la información que necesitás está acá.
 
 ---
 
@@ -36,6 +36,7 @@ Todo valor monetario se calcula **una sola vez** al momento de registrar y se gu
 - `cadetes_jornadas.*_usado` — los 3 valores de configuración congelados al cargar el cierre
 - `periodos.*` — snapshot completo congelado al cerrar la semana manualmente
 - `periodos_productos.*` / `periodos_gastos.*` — detalle congelado con el cierre
+- `metricas_faltantes_detalle.producto_nombre` y `.precio_unitario_venta` — congelados al guardar la métrica
 
 **Excepción explícita y deliberada:** `eliminarCierre()` (sección 15.3) borra intencionalmente un snapshot de `periodos` para permitir corregirlo y volver a cerrarlo. No es una recalculación automática: es una acción admin explícita de dos pasos con confirmación.
 
@@ -66,9 +67,9 @@ El sistema muestra descomposición aditiva matemáticamente exacta. No usa score
 
 **Extendido al módulo de stock:** cuando falta el conteo de inicio o fin de semana, la pantalla lo dice explícitamente (`ingredientesIncompletos`) en vez de inventar o estimar el dato faltante.
 
-**Extendido al Laboratorio:** las recomendaciones las genera la IA, pero el `SYSTEM_PROMPT` exige citar el número concreto del contexto que motiva cada una y prohíbe generar recomendaciones sobre áreas marcadas `sin_datos_todavia`. La comparación automática "antes vs. después" de una decisión (`resumenSugerido`) **no la genera la IA** — la genera código determinístico. Confirmado explícitamente por Lucas: "más rápido, gratis y consistente con la filosofía del sistema."
+**Extendido al Laboratorio:** las recomendaciones las genera la IA, pero el `SYSTEM_PROMPT` exige citar el número concreto del contexto que motiva cada una y prohíbe generar recomendaciones sobre áreas marcadas `sin_datos_todavia`. La comparación automática "antes vs. después" de una decisión (`resumenSugerido`) **no la genera la IA** — la genera código determinístico.
 
-**Extendido a Meta Ads (NUEVO esta sesión):** el `SYSTEM_PROMPT` del Laboratorio prohíbe explícitamente comparar el costo por conversación entre conjuntos de audiencia caliente y fría — son tipos de audiencia fundamentalmente distintos (caliente tiene menor volumen pero mayor conversión a pedido real; fría tiene más conversaciones pero menor conversión). La comparación entre tipos llevaría a conclusiones incorrectas. Solo se compara costo por conversación entre conjuntos del **mismo tipo de audiencia**.
+**Extendido a Meta Ads:** el `SYSTEM_PROMPT` del Laboratorio prohíbe explícitamente comparar el costo por conversación entre conjuntos de audiencia caliente y fría — son tipos de audiencia fundamentalmente distintos. Solo se compara costo por conversación entre conjuntos del **mismo tipo de audiencia**.
 
 ### 2.10 Separación admin / empleado
 Los empleados solo ven lo que Lucas decide mostrarles. Nunca ven montos en pesos — solo porcentajes y cantidades físicas. El dashboard de empleados es una pantalla separada con su propia ruta (`/panel`).
@@ -77,7 +78,7 @@ Los empleados solo ven lo que Lucas decide mostrarles. Nunca ven montos en pesos
 
 **Excepción deliberada — precio de venta en faltantes:** `metricas_faltantes_detalle.precio_unitario_venta` es el precio de venta al cliente (de `productos_precios`), no el costo interno. Tanto admin como empleado lo ven en la tabla de métricas (formato: "Royal Doble x2 ($84.000)"). No viola el principio porque es un precio público que no revela márgenes ni estructura de costos internos. Congelado al momento de registrar, igual que los demás valores del sistema.
 
-**Panel de empleados (ACTUALIZADO esta sesión):** se eliminó el contador de hamburguesas vendidas. La grilla quedó en 2 columnas: Pedidos y Margen neto. El `margenNeto` es el valor real de `calcularKpis` sin modificación.
+**Panel de empleados:** grilla de 2 columnas: Pedidos y Margen neto (sin hamburguesas vendidas). El `margenNeto` es el valor real de `calcularKpis` sin modificación.
 
 ### 2.11 Laboratorio: disparo manual, sin generación automática
 El botón "Generar recomendaciones" en `/laboratorio` es la única forma de llamar a la API de Anthropic. No hay cron, no hay generación al cerrar la semana. Costo predecible, sin ruido. Cualquier extensión futura requiere **consultar con Lucas** — no asumir que "más automático es mejor".
@@ -108,7 +109,7 @@ import { formatARS, formatDate, formatPercent } from '@/lib/utils/format';
 //       text-positive, text-warning, text-negative
 //       bg-positive-bg, bg-warning-bg, bg-negative-bg, bg-brand-light
 
-// Componentes del dashboard admin (NUEVO esta sesión):
+// Componentes del dashboard admin:
 // KpiCardHero: card grande con valor text-3xl, prop colorValor opcional (ej. 'text-negative')
 // ZonaDivisor: separador horizontal con label centrado, data-print="hidden"
 // SeccionColapsable: useState toggle local, content hidden cuando cerrado
@@ -131,6 +132,12 @@ const requestIdRef = useRef(0);
 
 // Hidratación: NUNCA usar new Date() directamente en JSX
 
+// Fechas con timezone: NUNCA usar new Date().toISOString().split('T')[0] para obtener la
+// fecha local. toISOString() devuelve UTC — en Argentina (UTC-3) después de las 21:00
+// da el día siguiente. Usar siempre fecha LOCAL:
+//   const hoy = new Date();
+//   const local = `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-${String(hoy.getDate()).padStart(2,'0')}`;
+
 // Migraciones SQL: nunca usar separadores Unicode (═══). Migraciones ya
 // aplicadas NUNCA se editan; si hace falta corregir algo, se agrega una
 // migración nueva.
@@ -149,6 +156,17 @@ const requestIdRef = useRef(0);
 // Antes de testear contra producción algo que escribe/borra en tablas operativas,
 // verificar primero si el período de prueba coincide con una semana real ya cerrada.
 // Usar datos sintéticos con fecha obviamente falsa (ej. año 2020) si hay cualquier duda.
+
+// Listas dinámicas en formularios controlados (ej. faltantes/quejas):
+// - Tipo local: { _id: string; ...campos } donde _id es para React key, nunca como dato
+// - IDs únicos: useRef counter (nextId.current++) — no Date.now() ni Math.random()
+// - key={periodo.viernes} en el componente padre para forzar remount al cambiar período
+
+// Admin client para datos no accesibles a empleados (importaciones, pedidos):
+// fetchImpIds() usa createAdminClient() porque empleados no tienen RLS sobre importaciones.
+// El auth se verifica PRIMERO con createClient() antes de llamar fetchImpIds().
+// Este patrón garantiza que el empleado puede ver métricas derivadas de pedidos
+// sin tener acceso directo a las tablas de importaciones/pedidos.
 ```
 
 ## 4. MIGRACIONES SQL — ESTADO COMPLETO
@@ -181,9 +199,9 @@ const requestIdRef = useRef(0);
 | 033 | `033_metricas_equipo.sql` | Tabla `metricas_equipo_semana` (mensajes/conversión/producción/quejas). Sin campos en pesos | ✅ Aplicado |
 | 034 | `034_laboratorio.sql` | Tabla `decisiones_laboratorio` (área, recomendación, decisión, resultado, estado). Admin-only | ✅ Aplicado |
 | 035 | `035_meta_ads.sql` | Tabla `meta_ads_importaciones` (una fila por semana, totales de gasto/alcance/clics/resultados). Admin-only | ✅ Aplicado |
-| 036 | `036_meta_ads_detalle.sql` | **NUEVO esta sesión.** Tabla `meta_ads_detalle` (detalle por anuncio/conjunto, con `tipo_audiencia`). ON DELETE CASCADE desde `meta_ads_importaciones`. Admin-only | ✅ Aplicado |
-| 037 | `037_meta_ads_detalle_fix_tipos.sql` | **NUEVO esta sesión.** ALTER TABLE `meta_ads_detalle`: cambia `costo_por_resultado_usd` y `ctr_enlace` de `NUMERIC(n,m)` a `NUMERIC` sin restricción — fix de "numeric field overflow" con valores de muchos decimales del CSV real | ✅ Aplicado |
-| 038 | `038_metricas_detalle.sql` | **NUEVO esta sesión.** Tablas `metricas_faltantes_detalle` (producto + cantidad + precio de venta congelado, ON DELETE CASCADE desde `metricas_equipo_semana`) y `metricas_quejas_detalle` (texto libre). RLS admin-full + empleado-SELECT. | ✅ Aplicado |
+| 036 | `036_meta_ads_detalle.sql` | Tabla `meta_ads_detalle` (detalle por anuncio/conjunto, con `tipo_audiencia`). ON DELETE CASCADE desde `meta_ads_importaciones`. Admin-only | ✅ Aplicado |
+| 037 | `037_meta_ads_detalle_fix_tipos.sql` | ALTER TABLE `meta_ads_detalle`: cambia `costo_por_resultado_usd` y `ctr_enlace` de `NUMERIC(n,m)` a `NUMERIC` sin restricción — fix de "numeric field overflow" con valores de muchos decimales del CSV real | ✅ Aplicado |
+| 038 | `038_metricas_detalle.sql` | Tablas `metricas_faltantes_detalle` (producto + cantidad + precio de venta congelado, ON DELETE CASCADE desde `metricas_equipo_semana`) y `metricas_quejas_detalle` (texto libre). RLS admin-full + empleado-SELECT. | ✅ Aplicado |
 
 ---
 
@@ -249,7 +267,7 @@ const requestIdRef = useRef(0);
 
 ### 5.14 Meta Ads
 - **`meta_ads_importaciones`** — id, periodo_desde (UNIQUE), periodo_hasta, gasto_operativo_id (FK nullable a `gastos_operativos`, ON DELETE SET NULL), gasto_usd, tipo_cambio, gasto_ars, alcance, impresiones, clics, resultados, nombre_archivo, registrado_por. Admin-only. Upsert por `periodo_desde`.
-- **`meta_ads_detalle`** (NUEVO esta sesión, migración 036+037) — id, importacion_id (FK → `meta_ads_importaciones` ON DELETE CASCADE), periodo_desde, nombre_campana, nombre_conjunto, nombre_anuncio, tipo_audiencia (CHECK: 'caliente'/'fría'), gasto_usd, gasto_ars, alcance, impresiones, conversaciones, costo_por_resultado_usd (NUMERIC sin restricción), ctr_enlace (NUMERIC sin restricción), clics_enlace. Admin-only. Índices en importacion_id y periodo_desde. Una fila = un anuncio individual filtrado (solo filas con gasto_usd > 0 OR conversaciones > 0).
+- **`meta_ads_detalle`** — id, importacion_id (FK → `meta_ads_importaciones` ON DELETE CASCADE), periodo_desde, nombre_campana, nombre_conjunto, nombre_anuncio, tipo_audiencia (CHECK: 'caliente'/'fría'), gasto_usd, gasto_ars, alcance, impresiones, conversaciones, costo_por_resultado_usd (NUMERIC sin restricción), ctr_enlace (NUMERIC sin restricción), clics_enlace. Admin-only. Índices en importacion_id y periodo_desde. Una fila = un anuncio individual filtrado (solo filas con gasto_usd > 0 OR conversaciones > 0).
 
 ### 5.15 Tablas Fase 0 eliminadas (migración 028)
 `empleados`, `asistencia`, `stock_conteos`, `stock_compras` — dropeadas.
@@ -336,20 +354,26 @@ delta_pp(metrica) = metrica_después − metrica_antes   // en puntos porcentual
 ```
 El texto `resumenSugerido` compara la semana de la decisión contra la semana más recientemente cerrada. Siempre incluye Margen neto y Ventas; agrega líneas según palabras clave en `area`.
 
-### 7.10 Meta Ads por conjunto (NUEVO esta sesión)
+### 7.10 Meta Ads por conjunto
 ```
 costoPorConversacion = gastoArs_conjunto / conversaciones_conjunto  (null si conversaciones = 0)
 ctrEnlace_conjunto   = (totalClics / totalImpresiones) × 100        (null si impresiones = 0)
 ```
-Calculado en `obtenerDetalleMetaAds()` agrupando filas de `meta_ads_detalle` por `nombre_conjunto`. **REGLA CRÍTICA:** solo comparar `costoPorConversacion` entre conjuntos del mismo `tipo_audiencia` ('caliente' o 'fría') — los tipos tienen tasas de conversión a pedido radicalmente distintas y compararlos da conclusiones incorrectas.
+Calculado en `obtenerDetalleMetaAds()` agrupando filas de `meta_ads_detalle` por `nombre_conjunto`. **REGLA CRÍTICA:** solo comparar `costoPorConversacion` entre conjuntos del mismo `tipo_audiencia` ('caliente' o 'fría').
+
+### 7.11 Porcentaje de pedidos con error (NUEVO esta sesión)
+```
+totalErrores = COUNT(faltantesDetalle) + COUNT(quejasDetalle)
+pctError = (totalErrores / pedidosEnPeriodo) × 100
+```
+Se calcula en vivo (no se guarda). `pedidosEnPeriodo` viene de la tabla `pedidos` filtrado por el período, usando admin client (empleados no tienen RLS directo sobre `pedidos`). Formato de display: `"12.5% de pedidos con error (3 de 24)"`. Si no hay datos de pedidos: muestra solo `"N errores"` o `"—"`.
 
 ---
 
 ## 8. MÓDULOS — ESTADO ACTUAL
 
-### ✅ Dashboard financiero (ACTUALIZADO esta sesión)
-
-`src/app/(admin)/dashboard/page.tsx` fue reestructurado en **3 zonas con jerarquía visual clara**:
+### ✅ Dashboard financiero
+`src/app/(admin)/dashboard/page.tsx` reestructurado en **3 zonas con jerarquía visual clara**:
 
 **Zona 1 — Resultado rápido:** 6 cards grandes (`KpiCardHero`) en grilla `grid-cols-2 sm:grid-cols-3`:
 1. Ventas (con delta vs semana anterior)
@@ -359,45 +383,110 @@ Calculado en `obtenerDetalleMetaAds()` agrupando filas de `meta_ads_detalle` por
 5. Clientes que volvieron (`pedidosRepetidores`)
 6. % facturación repetidores (`pctVentasRepetidores`)
 
-**Zona 2 — Por qué ese resultado:** `ZonaDivisor` + Cascada P&L + Semáforo + ¿Qué cambió? (apilados verticalmente, no en columnas).
+**Zona 2 — Por qué ese resultado:** `ZonaDivisor` + Cascada P&L + Semáforo + ¿Qué cambió?
 
 **Zona 3 — Evolución e inteligencia:** `ZonaDivisor` + `SeccionColapsable("Ranking de productos")` + `SeccionColapsable("Consumo de ingredientes")` + tabs de Evolución.
 
-Componentes nuevos definidos localmente en `dashboard/page.tsx`:
-- `KpiCardHero`: card con valor `text-3xl`, prop `colorValor` opcional para estados negativos
-- `ZonaDivisor`: línea horizontal con label centrado, `data-print="hidden"`
-- `SeccionColapsable`: toggle `useState` local, colapsado por defecto, contenido hidden cuando cerrado
+**Botón "Cerrar semana" (ACTUALIZADO esta sesión):**
+```typescript
+// ANTES (bug): no aparecía el lunes porque esActual=true aunque el período ya terminó
+const semanaTerminada = tipoSeleccionado === 'semana' && !rango.esActual;
 
-Las 11 KPI cards del área principal anterior fueron eliminadas (la información sigue accesible en la cascada P&L y los tabs de Evolución).
+// AHORA (fix): aparece cuando el período ya terminó (rango.hasta < hoy) aunque siga siendo esActual
+const hoyLocalStr = (() => { const h = new Date(); return `${h.getFullYear()}-${String(h.getMonth()+1).padStart(2,'0')}-${String(h.getDate()).padStart(2,'0')}`; })();
+const semanaTerminada = tipoSeleccionado === 'semana' && (!rango.esActual || rango.hasta < hoyLocalStr);
+```
+Usa fecha local (no UTC) para la comparación.
 
-`actions.ts`: sin cambios de fondo — `KpisPeriodo` ya tenía todos los campos necesarios (`pedidosRepetidores`, `pctVentasRepetidores`, etc.).
+### ✅ Gastos operativos (ACTUALIZADO esta sesión)
+`src/app/(admin)/gastos/page.tsx`, `FormGasto`:
+
+**Fecha por defecto (CORREGIDA esta sesión):**
+```typescript
+// ANTES (bug): daba UTC, en Argentina después de las 21:00 mostraba mañana
+// → el gasto se guardaba con fecha futura y no aparecía en el filtro Vie-Dom
+const [fecha, setFecha] = useState(initial?.fecha ?? new Date().toISOString().split('T')[0]);
+
+// AHORA (fix): usa periodoActual.fechaHasta (el domingo del período) como default
+// Esto garantiza que el gasto siempre cae dentro del filtro del período visible
+const [fecha, setFecha] = useState(() => {
+  if (initial?.fecha) return initial.fecha;
+  if (periodoActual?.fechaHasta) return periodoActual.fechaHasta;
+  const hoy = new Date();
+  return `${hoy.getFullYear()}-${String(hoy.getMonth()+1).padStart(2,'0')}-${String(hoy.getDate()).padStart(2,'0')}`;
+});
+```
+
+**Nota de diseño importante:** el filtro de `obtenerGastosPeriodo` es estrictamente Vie-Dom (`fecha >= viernes AND fecha <= domingo`). Si el usuario cambia manualmente la fecha a lunes o posterior, el gasto se guarda pero no aparece en la vista del período actual. El campo "Se asigna al período" ya informa visualmente el período destino.
 
 ### ✅ Panel de empleados (ACTUALIZADO esta sesión)
+`src/app/(empleado)/panel/page.tsx`:
+- Tabla de métricas del equipo con 7 columnas: Semana, Mensajes, Conversión, T. producción, Faltantes, Quejas de calidad, **% error** (NUEVO).
+- Padding horizontal correctivo: `pr-4` en columna Semana, `px-3` en Mensajes/Conversión/T. producción.
+- `textoFaltantes()`: con detalle → "4 faltantes — Royal Doble x2 ($84.000), Papas x2 ($32.000)"; legacy → "4 faltantes".
+- `textoQuejas()`: con detalle → "1 queja — vino cruda"; legacy → "1 queja".
+- `textoError()`: con pedidos → "12.5% de pedidos con error (3 de 24)"; sin pedidos → "N errores" o "—".
 
-`src/app/(empleado)/panel/page.tsx`: eliminado el contador de hamburguesas vendidas (`hamburguesasVendidas`). La grilla de stats pasó de 3 columnas a 2: Pedidos y Margen neto. `margenNeto` sigue siendo el valor real de `calcularKpis` — sin modificaciones.
+### ✅ Métricas de equipo — admin (ACTUALIZADO esta sesión)
+`src/app/(admin)/equipo/page.tsx` y `actions.ts`:
+
+**Tipos exportados:**
+```typescript
+export type FaltanteItem = { productoId: string; productoNombre: string; cantidad: number; precioUnitarioVenta: number; };
+export type QuejaItem = { descripcion: string; };
+export type ProductoCatalogo = { id: string; nombre: string; precioVigente: number | null; };
+export type MetricasEquipoSemana = {
+  periodoDesde: string; periodoHasta: string;
+  mensajesRecibidos: number | null; mensajesConvertidos: number | null;
+  tiempoPromedioProduccionMin: number | null;
+  quejasFaltantes: number | null;  // legacy integer, kept for backward compat
+  quejasCalidad: number | null;    // legacy integer, kept for backward compat
+  faltantesDetalle: FaltanteItem[]; quejasDetalle: QuejaItem[];
+  pedidosEnPeriodo: number | null;  // calculado con admin client
+};
+```
+
+**Formulario admin (`FormMetricas`):**
+- Lista dinámica de faltantes: dropdown producto + cantidad. Precio de venta calculado automáticamente y mostrado en tiempo real.
+- Lista dinámica de quejas: texto libre por ítem.
+- Block de "% de pedidos con error" en tiempo real antes del botón guardar (reactivo al estado del formulario).
+- `key={periodo.viernes}` fuerza remount al cambiar de semana.
+
+**`guardarMetricasPeriodo`:** congela nombre y precio de venta al momento de guardar (mismo patrón que `pedidos_lineas`). DELETE + INSERT en las tablas de detalle para reemplazar.
+
+**`fetchImpIds()` y conteo de pedidos:**
+```typescript
+// Usa createAdminClient() porque empleados no tienen RLS sobre importaciones.
+// El auth ya fue verificado con createClient() antes de llamar esto.
+async function fetchImpIds(): Promise<string[]> {
+  const admin = createAdminClient();
+  const { data } = await admin.from('importaciones').select('id').eq('estado', 'activa');
+  return (data ?? []).map((i: any) => i.id as string);
+}
+```
+- `obtenerMetricasPeriodo`: 1 query de pedidos para el período.
+- `obtenerMetricasHistorico`: 1 sola query de pedidos cubriendo todo el rango histórico; count por período en TypeScript. Costo fijo: 2 queries extra independientemente del número de períodos.
+
+**Selector con `METRICA_SELECT = '*, metricas_faltantes_detalle(*), metricas_quejas_detalle(*)'`** — nested select de Supabase para traer el detalle en una sola query.
 
 ### ✅ MÓDULOS ESTABLES (no tocar sin consulta)
 
 **Auditoría Financiera Inteligente** (`/auditoria`), **Exportación PDF**, **Importación Pedix**, **Cadetes**, **Consumo interno**, **Productos / Ingredientes**, **Configuración** — sin cambios.
 
-### ✅ Sistema de Empleados + Stock (construido en sesiones anteriores, sección 13)
+### ✅ Sistema de Empleados + Stock (sección 13)
+**Gestión de usuarios** (`/usuarios`), **Módulo de stock** (`/stock`), **Conteo nocturno** (`/panel/stock`), **Metas del equipo** — sin cambios.
 
-**Gestión de usuarios** (`/usuarios`), **Módulo de stock** (`/stock`), **Conteo nocturno** (`/panel/stock`), **Metas del equipo**, **Métricas de equipo** — sin cambios.
-
-### ✅ Salud de Clientes + Recuperación (construido en sesión anterior, sección 14.1)
-
+### ✅ Salud de Clientes + Recuperación (sección 14.1)
 Sin cambios.
 
-### ✅ Laboratorio (ACTUALIZADO esta sesión)
-
+### ✅ Laboratorio
 `laboratorio/actions.ts`:
-- `construirContextoKpis()` ahora llama a `obtenerDetalleMetaAds(desde)` y añade `metaAds.porConjunto` al contexto (array de `MetaAdsConjuntoResumen` con nombre, tipoAudiencia, gastoArs, conversaciones, costoPorConversacion, ctrEnlace). Si no hay detalle para esa semana (semana importada antes de esta feature), queda `[]`.
-- `SYSTEM_PROMPT` tiene una **REGLA CRÍTICA** nueva: prohibición explícita de comparar `costoPorConversacion` entre conjuntos de distinto tipo de audiencia. Define caliente (seguidores/compradores previos) vs fría (audiencia nueva), y exige comparar solo entre conjuntos del mismo tipo.
-- **Bug fix:** `generarRecomendaciones()` ahora borra todas las filas en estado `'sugerida'` del período antes de insertar las nuevas. Las `'decidida'` y `'evaluada'` no se tocan nunca. Antes de este fix, regenerar acumulaba recomendaciones encima de las anteriores.
+- `construirContextoKpis()` llama a `obtenerDetalleMetaAds(desde)` y añade `metaAds.porConjunto` al contexto.
+- `SYSTEM_PROMPT` tiene la **REGLA CRÍTICA** de no comparar caliente/fría.
+- `generarRecomendaciones()` borra todas las `'sugeridas'` del período antes de insertar nuevas.
 
-### ✅ Importación de Meta Ads (ACTUALIZADO esta sesión — detalle por conjunto)
-
-Ver sección 15 completa.
+### ✅ Importación de Meta Ads (sección 15)
+Sin cambios en esta sesión.
 
 ---
 
@@ -413,28 +502,26 @@ src/
     (admin)/
       layout.tsx
       dashboard/
-        actions.ts           ← KpisPeriodo + calcularKpis() + obtenerSaludClientes()
-                                + obtenerContactosCliente/registrarContacto
-        page.tsx             ← ACTUALIZADO esta sesión: 3 zonas (KpiCardHero/ZonaDivisor/
-                                SeccionColapsable), banner post-cierre, AccionEliminarCierre
+        actions.ts
+        page.tsx             ← ACTUALIZADO esta sesión: semanaTerminada usa hoyLocalStr
       importar/
       productos/
         actions-ingredientes.ts, actions-productos.ts
         IngredientesTab.tsx, ProductosTab.tsx, page.tsx
       gastos/
         actions.ts           ← PeriodoInfo, obtenerPeriodoActual/PorOffset/DeFecha
-        actions-meta-ads.ts  ← ACTUALIZADO esta sesión: importarMetaAds acepta
-                                tipoAudienciaMap + filas; obtenerDetalleMetaAds() nuevo;
-                                MetaAdsConjuntoResumen type nuevo
-        page.tsx             ← ACTUALIZADO esta sesión: FormImportarMetaAds en 2 pasos
-                                (paso 1: archivo + tipo cambio; paso 2: clasificar conjuntos
-                                caliente/fría por conjunto detectado)
+        actions-meta-ads.ts  ← importarMetaAds acepta tipoAudienciaMap + filas
+        page.tsx             ← ACTUALIZADO esta sesión: FormGasto fecha default → periodoActual.fechaHasta
       stock/
         actions.ts, page.tsx
       usuarios/
         actions.ts, page.tsx
       equipo/
-        actions.ts, page.tsx
+        actions.ts           ← ACTUALIZADO esta sesión: FaltanteItem/QuejaItem/ProductoCatalogo,
+                                fetchImpIds() con adminClient, obtenerMetricasHistorico batch,
+                                guardarMetricasPeriodo congela nombre+precio
+        page.tsx             ← ACTUALIZADO esta sesión: FormMetricas controlado con listas
+                                dinámicas + % error en tiempo real
       consumo-interno/
         actions.ts, page.tsx
       cadetes/
@@ -446,15 +533,15 @@ src/
       auditoria/
         actions.ts
       laboratorio/
-        actions.ts           ← ACTUALIZADO esta sesión: construirContextoKpis agrega
-                                porConjunto; SYSTEM_PROMPT con regla caliente/fría;
-                                generarRecomendaciones borra 'sugeridas' antes de insertar
+        actions.ts           ← construirContextoKpis agrega porConjunto; SYSTEM_PROMPT
+                                con regla caliente/fría; generarRecomendaciones borra 'sugeridas'
         page.tsx
     (empleado)/
       layout.tsx
       panel/
         actions.ts
-        page.tsx             ← ACTUALIZADO esta sesión: sin hamburguesas, grilla 2 cols
+        page.tsx             ← ACTUALIZADO esta sesión: grilla 2 cols, textoFaltantes/
+                                textoQuejas/textoError, tabla 7 columnas con % error
         stock/
           page.tsx
   lib/
@@ -464,11 +551,7 @@ src/
       server.ts, admin.ts, client.ts
     utils/
       pedix-parser.ts
-      meta-ads-parser.ts     ← ACTUALIZADO esta sesión: MetaAdsFilaDetalle type nuevo;
-                                MetaAdsParseResult agrega filas[] y conjuntosDetectados[];
-                                detecta columnas: conjunto, campaña, anuncio, costoResultado,
-                                CTR, clicsEnlace; filtra filas inactivas (gasto=0 Y conv=0);
-                                parseNumeroOpcional() nueva helper
+      meta-ads-parser.ts     ← MetaAdsFilaDetalle, conjuntosDetectados, parseNumeroOpcional
       format.ts, export.ts
   components/
     layout/
@@ -478,36 +561,36 @@ src/
     ui/index.tsx
 supabase/
   migrations/
-    ... (001–035 aplicadas, ver sección 4)
-    036_meta_ads_detalle.sql      ← NUEVO esta sesión
-    037_meta_ads_detalle_fix_tipos.sql ← NUEVO esta sesión
+    ... (001–037 aplicadas, ver sección 4)
+    038_metricas_detalle.sql      ← Aplicado esta sesión
 ```
 
 ---
 
 ## 10. DATOS REALES DE ROYALTY (contexto de negocio)
 
-**Historial:** finales de abril a 26 junio 2026. ~900 pedidos totales.
+**Historial:** finales de abril a 30 junio 2026. ~900+ pedidos totales.
 
 **Clientes:**
-- 761 clientes únicos. 88.7% compraron 1 sola vez.
-- Tasa de retención: 11.3% (historial de 2 meses — interpretar con cautela).
+- 761+ clientes únicos. ~88.7% compraron 1 sola vez.
+- Tasa de retención: ~11.3% (historial de 2 meses — interpretar con cautela).
 - Ciclo de compra: mediana 12 días, promedio 14.2 días → `cliente_ventana_activo_dias=21` correcto.
 
 **Rentabilidad (semanas cerradas):**
 - Semana 5-7 jun: Margen neto **-15.7%** → Pérdida.
 - Semana 12-14 jun: Margen neto **-12.3%** → Pérdida (mejora).
-- Semana 19-21 jun: Ventas $1.856.500, Beneficio neto -$140.859, Margen neto **-7.6%**, Publicidad 30.04% de ventas (~$557.710) → Mejora sostenida. Esta semana fue la primera donde Meta Ads se importó con detalle por conjunto, clasificando los conjuntos como caliente/fría.
+- Semana 19-21 jun: Ventas $1.856.500, Beneficio neto -$140.859, Margen neto **-7.6%**, Publicidad 30.04% de ventas (~$557.710) → Mejora sostenida. Primera semana con Meta Ads importado con detalle por conjunto (caliente/fría).
+- Semana 27-29 jun: **Pendiente de cierre** (el botón ya está disponible desde el lunes 30 jun).
 
 **Delivery actual:** resultado ~-$181.000/semana.
 
-**Merma:** el módulo está construido y deployado pero no hay conteos reales cargados todavía. En curso: medir manualmente 3 semanas (ver roadmap).
+**Merma:** el módulo está construido y deployado pero no hay conteos reales cargados todavía.
 
-**Ingredientes controlados de stock:** Carne (48.9% del costo, cuenta en medallones), Cheddar (11.0%), Papas fritas Buttler (10.6%), Panes de papa (8.3%) — ~79% del costo total.
+**Ingredientes controlados de stock:** Carne (48.9% del costo), Cheddar (11.0%), Papas fritas Buttler (10.6%), Panes de papa (8.3%) — ~79% del costo total.
 
-**Meta Ads:** módulo de importación con detalle por conjunto activo y deployado. La campaña actual ("Mensajes wsp Royalty / Junio 2026") tiene 4 conjuntos de anuncios: "Seguidores IG" y "Compradores Royalty" (caliente), "Abierto frio Royalty" y "Abierto frio Royalty - Copia" (fría).
+**Meta Ads:** campaña "Mensajes wsp Royalty / Junio 2026" con 4 conjuntos: "Seguidores IG" y "Compradores Royalty" (caliente), "Abierto frio Royalty" y "Abierto frio Royalty - Copia" (fría).
 
-**Laboratorio:** ya generó recomendaciones reales sobre datos reales (validadas como específicas y bien fundamentadas). Tiene decisiones registradas en producción. Es una herramienta en uso activo. La evaluación automática post-cierre está activa — al cerrar una semana, el dashboard muestra cuántas decisiones previas se pueden evaluar con los nuevos datos.
+**Laboratorio:** en uso activo con decisiones registradas en producción y evaluación automática post-cierre activa.
 
 ---
 
@@ -532,8 +615,9 @@ supabase/
 | Bloquear cierre hasta evaluar decisiones pendientes | Banner posterior, no bloqueante |
 | Recalcular `periodos` automáticamente cuando cambia un gasto | Viola principio 2.7 |
 | Borrado quirúrgico de gastos "solo los de Meta Ads" | Se borra todo gasto `categoria='publicidad'` del rango al reimportar |
-| `tipo_audiencia` en tabla separada (lookup conjunto→tipo) | Denormalizado por fila — más simple, sobrevive reimports, no necesita join extra |
+| `tipo_audiencia` en tabla separada (lookup conjunto→tipo) | Denormalizado por fila — más simple, sobrevive reimports |
 | NUMERIC(n,m) para ctr_enlace y costo_por_resultado_usd | Causa overflow con decimales reales del CSV. Reemplazado por NUMERIC sin restricción |
+| **Extender filtro de gastos a Mon-Thu en `obtenerGastosPeriodo`** | Cambiaría qué gastos incluye el cierre (usa rango.desde/hasta Vie-Dom). La solución correcta fue cambiar el default de fecha al domingo del período. |
 
 ---
 
@@ -545,7 +629,6 @@ supabase/
 | Reimportación omitía pedidos | Dedup sin filtrar por importación activa | `importaciones!inner(estado)='activa'` en query de dedup |
 | Gráfico de margen sin valores negativos | Eje Y hardcodeado [0, 100] | Eje Y dinámico con `min(0, ...valores) - 5` |
 | `ROAS = undefined` | `actions.ts` y `page.tsx` desincronizados | Reemplazar ambos juntos siempre |
-| Botón "Cerrar semana" no aparecía | Bug de timezone | `semanaTerminada = tipo==='semana' && (!esActual \|\| rango.hasta < hoyStr)` |
 | Error de hidratación con SheetJS | `await import('xlsx')` durante SSR | CSV puro sin dependencias |
 | Error de hidratación con `new Date()` en JSX | Servidor en UTC, cliente en UTC-3 | `suppressHydrationWarning` + `typeof window !== 'undefined'` |
 | `npx next build` rompía por `src-fase0-backup` | Carpeta de respaldo vieja entraba al type-check | Excluida en `tsconfig.json` |
@@ -554,9 +637,13 @@ supabase/
 | Cálculo de merma con unidades mixtas | Sumar primero y convertir el total es incorrecto | Cada término se convierte individualmente antes de combinarse |
 | Identidad de Git incorrecta bloqueaba deploy en Vercel | Nunca se configuró `git config --global user.email/user.name` | Resuelto: `git config --global user.email "bsediciones@gmail.com"` y `user.name "Lucas Alaniz"` |
 | Force-push no disparó deploy nuevo en Vercel | Webhook de GitHub→Vercel no procesa push no-fast-forward igual que uno normal | Commit vacío (`git commit --allow-empty`) con push normal retriggerea el webhook |
-| Test de Playwright sobrescribió datos reales | El período "actual" resultó ser la semana 19-21 jun ya cerrada | Usar fechas obviamente falsas para pruebas. El gasto se restauró inmediatamente; el snapshot `periodos` no se vio afectado |
-| **Numeric field overflow al importar Meta Ads** | `ctr_enlace NUMERIC(8,6)` y `costo_por_resultado_usd NUMERIC(10,4)` no admitían los decimales reales del CSV de Meta Ads | Migración 037: ambos campos pasan a `NUMERIC` sin restricción |
-| **Regenerar recomendaciones acumulaba encima de las anteriores** | `generarRecomendaciones()` insertaba filas nuevas sin borrar las `'sugeridas'` existentes del mismo período | Borrar todas las `'sugeridas'` del período antes de insertar las nuevas. Las `'decidida'` y `'evaluada'` nunca se tocan |
+| Test de Playwright sobrescribió datos reales | El período "actual" resultó ser la semana 19-21 jun ya cerrada | Usar fechas obviamente falsas para pruebas |
+| Numeric field overflow al importar Meta Ads | `ctr_enlace NUMERIC(8,6)` y `costo_por_resultado_usd NUMERIC(10,4)` no admitían los decimales reales | Migración 037: ambos campos pasan a `NUMERIC` sin restricción |
+| Regenerar recomendaciones acumulaba encima de las anteriores | `generarRecomendaciones()` insertaba sin borrar las `'sugeridas'` existentes | Borrar todas las `'sugeridas'` del período antes de insertar nuevas |
+| **`pedidosEnPeriodo` siempre null para empleados** | `fetchImpIds()` usaba `createClient()` (con RLS) — empleados no tienen acceso a `importaciones` | `fetchImpIds()` usa `createAdminClient()`. Auth verificado con cliente normal antes de llamarlo |
+| **Columnas Semana y Mensajes visualmente pegadas en tabla del empleado** | Sin padding horizontal en la tabla de métricas del equipo | `pr-4` en columna Semana, `px-3` en Mensajes/Conversión/T. producción |
+| **Gastos no aparecían tras registrarlos** | `FormGasto` usaba `new Date().toISOString().split('T')[0]` (UTC) — en Argentina después de las 21:00 daba el día siguiente; el gasto se guardaba con fecha futura y quedaba fuera del filtro Vie-Dom | Fecha default cambiada a `periodoActual.fechaHasta` (el domingo del período) |
+| **Botón "Cerrar semana" no aparecía el lunes** | `semanaTerminada = !rango.esActual`; el lunes el período sigue siendo "actual" porque `periodoDeJS(lunes) = viernes anterior`, así que `esActual = true` y el botón nunca aparecía | Agregado `|| rango.hasta < hoyLocalStr` a la condición. Ahora aparece cuando el período ya terminó aunque siga siendo "actual" |
 
 ---
 
@@ -569,7 +656,7 @@ supabase/
 - `/panel` en vez de `/dashboard` (colisión de URL).
 - `metas_equipo.descripcion` es texto libre sin monto sugerido (principio 2.10).
 - `/usuarios` separado de `/equipo` (respeta separación de migración 017).
-- **Actualización esta sesión:** grilla de stats 2 columnas (Pedidos + Margen neto). Sin hamburguesas.
+- Grilla de stats 2 columnas: Pedidos + Margen neto. Sin hamburguesas vendidas.
 
 ### 13.3 Módulo de stock
 - `conteo_en_unidad_receta` como toggle por ingrediente.
@@ -589,17 +676,19 @@ supabase/
 
 ### 14.2 Métricas de equipo
 
-5 métricas operativas por semana (`metricas_equipo_semana`): mensajes recibidos, mensajes convertidos, tiempo de producción, quejas faltantes, quejas calidad. Sin ningún campo en pesos. Empleados ven evolución completa (policy SELECT directa).
+5 métricas base por semana (`metricas_equipo_semana`): mensajes recibidos, mensajes convertidos, tiempo de producción, quejas faltantes (conteo legacy), quejas calidad (conteo legacy).
 
-`/equipo` tiene tab "Métricas semanales" con navegador de período. El formulario usa `key={periodo.viernes}` para forzar remount al cambiar de semana.
+Detalle por período (`metricas_faltantes_detalle` + `metricas_quejas_detalle`): sustituyen los enteros legacy con listas completas de ítems. Texto generado dinámicamente en UI, no guardado.
+
+Métrica derivada: `pedidosEnPeriodo` (calculado en el server action con admin client; no guardado en DB). Permite mostrar `% de pedidos con error` tanto en el formulario admin (tiempo real, reactivo al estado del formulario) como en la tabla del empleado.
 
 ### 14.3 Laboratorio — recomendaciones de IA + decisión + resultado + evaluación automática
 
 **Generación (manual):**
 1. Lucas elige un período y aprieta "Generar recomendaciones".
-2. `construirContextoKpis()` junta: financiero, clientes, equipo, merma (solo ingredientes con datos completos), Meta Ads totales + **porConjunto** (NUEVO esta sesión). Cualquier bloque sin datos queda como `"sin_datos_todavia"`.
+2. `construirContextoKpis()` junta: financiero, clientes, equipo, merma, Meta Ads totales + porConjunto. Cualquier bloque sin datos queda como `"sin_datos_todavia"`.
 3. Llamada a Anthropic (`claude-opus-4-8`) con `zodOutputFormat()` + `response.parsed_output`.
-4. Borra todas las `'sugeridas'` del período (NUEVO esta sesión — fix del bug de acumulación).
+4. Borra todas las `'sugeridas'` del período (fix del bug de acumulación).
 5. Inserta cada recomendación como fila individual en `decisiones_laboratorio`, estado `'sugerida'`.
 
 **Seguimiento:**
@@ -609,7 +698,7 @@ supabase/
 **Evaluación automática post-cierre:**
 Al cerrar una semana, el dashboard cuenta cuántas decisiones `'decidida'` tienen ya una semana cerrada posterior para comparar, y muestra un banner descartable con link a `/laboratorio`.
 
-`aplicarResumenSugerido()` genera `resumenSugerido` — texto por código determinístico, no por IA. Compara la semana de la decisión contra la semana más recientemente cerrada. Siempre incluye Margen neto y Ventas; agrega líneas según palabras clave en `area` (Delivery → resultadoDelivery; Publicidad/Costos → publicidadPct + Meta Ads si hay datos de ambas semanas; Equipo/Quejas/Mensajes → conversión + quejas; Merma/Stock → merma total).
+`aplicarResumenSugerido()` genera `resumenSugerido` — texto por código determinístico, no por IA.
 
 ---
 
@@ -617,52 +706,43 @@ Al cerrar una semana, el dashboard cuenta cuántas decisiones `'decidida'` tiene
 
 ### 15.1 Flujo de importación original (totales)
 
-1. **Parseo** (`parseMetaAdsCsv`): CSV puro, sin dependencias. Busca columnas por nombre con candidatos español/inglés. Suma todas las filas.
-2. **Conversión**: `gastoArs = gastoUsd × tipoCambio`. El tipo de cambio lo ingresa Lucas a mano (no es config global).
-3. **Reemplazo**: borra TODO gasto `categoria='publicidad'` en el rango de fechas y si `gastoArs > 0` crea uno nuevo con nota `"Importado de Meta Ads (USD X × $Y)"`.
+1. **Parseo** (`parseMetaAdsCsv`): CSV puro, sin dependencias. Busca columnas por nombre. Suma todas las filas.
+2. **Conversión**: `gastoArs = gastoUsd × tipoCambio`. El tipo de cambio lo ingresa Lucas a mano.
+3. **Reemplazo**: borra TODO gasto `categoria='publicidad'` en el rango de fechas y si `gastoArs > 0` crea uno nuevo.
 4. **Upsert** en `meta_ads_importaciones` por `periodo_desde`.
 5. **Deshacer** (`eliminarMetaAdsPeriodo`): borra gasto vinculado + fila de importación + detalle en cascada.
 
-### 15.2 Detalle por conjunto (NUEVO esta sesión)
+### 15.2 Detalle por conjunto
 
 **Parser** (`src/lib/utils/meta-ads-parser.ts`):
 - Nuevo tipo `MetaAdsFilaDetalle`: `{ nombreCampana, nombreConjunto, nombreAnuncio, gastoUsd, alcance, impresiones, conversaciones, costoResultadoUsd, ctrEnlace, clicsEnlace }`.
 - `MetaAdsParseResult` ahora incluye `filas: MetaAdsFilaDetalle[]` y `conjuntosDetectados: string[]`.
-- Columnas detectadas (por nombre, no por posición): Nombre del conjunto de anuncios, Nombre de la campaña, Nombre del anuncio, Coste por resultados, CTR (tasa de clics en el enlace), Clics en el enlace.
-- Filtro: solo se incluyen en `filas` las rows con `gastoUsd > 0 OR conversaciones > 0`. Las inactivas (todo cero) se descartan.
-- `conjuntosDetectados`: únicos de `filas` (solo conjuntos con actividad real).
-- Nueva helper `parseNumeroOpcional(raw)`: devuelve `null` si el campo está vacío (vs `parseNumeroFlexible` que devuelve 0).
+- Filtro: solo se incluyen en `filas` las rows con `gastoUsd > 0 OR conversaciones > 0`.
+- Nueva helper `parseNumeroOpcional(raw)`: devuelve `null` si el campo está vacío.
 
-**Formulario 2 pasos** (`src/app/(admin)/gastos/page.tsx`, `FormImportarMetaAds`):
-- **Paso 1:** archivo CSV + tipo de cambio. Al parsear, muestra cuántos conjuntos detectó. Botón "Continuar — clasificar audiencias" habilitado cuando hay archivo parseado y tipo de cambio > 0.
-- **Paso 2:** por cada `conjuntoDetectado`, radio buttons caliente/fría. Botón "Confirmar importación" habilitado cuando todos los conjuntos están clasificados. Botón "← Volver" para corregir.
+**Formulario 2 pasos** (`FormImportarMetaAds`):
+- **Paso 1:** archivo CSV + tipo de cambio.
+- **Paso 2:** radio buttons caliente/fría por conjunto. Botón "Confirmar importación" habilitado cuando todos clasificados.
 
-**Server action** (`importarMetaAds`):
-- Acepta `tipoAudienciaMap: Record<string, 'caliente' | 'fría'>` y `filas: MetaAdsFilaDetalle[]`.
-- El upsert a `meta_ads_importaciones` ahora hace `.select('id').single()` para obtener el `importacion_id`.
-- Borra el detalle anterior (`meta_ads_detalle` WHERE `importacion_id`) y lo reemplaza con las filas nuevas.
-- Para cada fila: `gasto_ars = gastoUsd × tipoCambio`, `tipo_audiencia = tipoAudienciaMap[fila.nombreConjunto]`.
+**Server action** (`importarMetaAds`): acepta `tipoAudienciaMap` y `filas`. Upsert + reemplazo de detalle.
 
-**Consulta para el Laboratorio** (`obtenerDetalleMetaAds(periodoDesde)`):
-- Agrupa filas de `meta_ads_detalle` por `nombre_conjunto` en código TypeScript (no SQL).
-- Devuelve `MetaAdsConjuntoResumen[]`: `{ nombre, tipoAudiencia, gastoArs, conversaciones, costoPorConversacion, ctrEnlace }`.
-- `costoPorConversacion`: null si conversaciones = 0.
-- `ctrEnlace`: weighted average (totalClics / totalImpresiones × 100), null si impresiones = 0.
+**Consulta para el Laboratorio** (`obtenerDetalleMetaAds(periodoDesde)`): agrupa por `nombre_conjunto`. Devuelve `MetaAdsConjuntoResumen[]`.
 
 ### 15.3 Eliminar cierre
 
-Botón "Eliminar cierre" en Tabla Semanal de Evolución, con confirmación de dos pasos. Llama a `eliminarCierre(periodoId)` en `evolucion/actions.ts` (verifica rol admin). Solo borra el snapshot — no toca tablas operativas. `periodos_productos`/`periodos_gastos` caen en cascada.
+Botón "Eliminar cierre" en Tabla Semanal de Evolución, con confirmación de dos pasos. Llama a `eliminarCierre(periodoId)`. Solo borra el snapshot — no toca tablas operativas.
 
 ### 15.4 Integración con el Laboratorio
 
-`construirContextoKpis()` llama a `obtenerDetalleMetaAds(desde)` y agrega `metaAds.porConjunto` al contexto JSON. Si no hay detalle para esa semana (semana vieja sin detalle), `porConjunto` queda `[]`. `construirResumen()` (comparación automática post-cierre) agrega una línea de Meta Ads cuando el área de la decisión es publicidad/costos y hay datos de ambas semanas comparadas.
+`construirContextoKpis()` agrega `metaAds.porConjunto` al contexto JSON.
 
 ### 15.5 Procedimiento para corregir una semana ya cerrada con datos de Meta Ads
 
 1. En `/gastos`, borrar el/los gasto(s) de publicidad manual de esa semana.
-2. "Importar Meta Ads" → CSV de esa semana histórica → **tipo de cambio de esa semana** (no el del día actual) → clasificar conjuntos → confirmar.
+2. "Importar Meta Ads" → CSV de esa semana histórica → **tipo de cambio de esa semana** → clasificar conjuntos → confirmar.
 3. Dashboard → Evolución → "Eliminar cierre" de esa semana → confirmar.
-4. Volver a cerrar la semana (recalcula con el gasto correcto y lo congela de nuevo).
+4. Volver a cerrar la semana.
+
 Hacer los 4 pasos seguidos — mientras tanto la semana aparece como "no cerrada".
 
 ---
@@ -671,7 +751,8 @@ Hacer los 4 pasos seguidos — mientras tanto la semana aparece como "no cerrada
 
 No hay una etapa grande sin especificar pendiente. Lo que sigue es operar lo ya construido (ver roadmap, sección 17). Algunas ideas que surgieron pero **no se acordaron en detalle** — no avanzar sin conversar con Lucas:
 - ¿Simplificar el procedimiento de "Eliminar cierre + reimportar" en un solo botón ("Corregir y recerrar")?
-- ¿Agregar comparación de conjuntos de Meta Ads semana a semana en el Laboratorio, más allá de cuando coincide con una decisión?
+- ¿Agregar comparación de conjuntos de Meta Ads semana a semana en el Laboratorio?
+- ¿Extender el filtro de `obtenerGastosPeriodo` para cubrir lunes-jueves además de Vie-Dom? (actualmente los gastos fechados en lunes no aparecen en la vista del período)
 
 ---
 
@@ -690,19 +771,22 @@ No hay una etapa grande sin especificar pendiente. Lo que sigue es operar lo ya 
 | Laboratorio: recomendaciones de IA + decisión + resultado | ✅ Completo |
 | Laboratorio: evaluación automática post-cierre (banner + resumen por código) | ✅ Completo |
 | Importación de Meta Ads (CSV → gasto en ARS + métricas totales) | ✅ Completo |
-| **Detalle de Meta Ads por conjunto con tipo de audiencia caliente/fría** | ✅ **Completo esta sesión** |
-| **Métricas de equipo: faltantes con producto + precio congelado + quejas con texto libre** | ✅ **Completo esta sesión** |
-| **Laboratorio: contexto porConjunto + regla caliente/fría en SYSTEM_PROMPT** | ✅ **Completo esta sesión** |
-| **Dashboard admin: 3 zonas con jerarquía visual (KpiCardHero/ZonaDivisor/SeccionColapsable)** | ✅ **Completo esta sesión** |
-| **Dashboard admin: 6 cards en Zona 1 (+ Clientes que volvieron + % facturación repetidores)** | ✅ **Completo esta sesión** |
-| **Panel empleados: sin hamburguesas, solo Pedidos y Margen neto** | ✅ **Completo esta sesión** |
-| **Fix: regenerar recomendaciones reemplaza en vez de acumular** | ✅ **Completo esta sesión** |
+| Detalle de Meta Ads por conjunto con tipo de audiencia caliente/fría | ✅ Completo |
+| Dashboard admin: 3 zonas + 6 cards Zona 1 (Clientes que volvieron + % repetidores) | ✅ Completo |
+| Panel empleados: grilla 2 columnas (Pedidos + Margen neto, sin hamburguesas) | ✅ Completo |
+| Fix: regenerar recomendaciones reemplaza en vez de acumular | ✅ Completo |
 | Botón "Eliminar cierre" en Evolución | ✅ Completo |
-| Identidad de Git configurada globalmente en la máquina de Lucas | ✅ Completo |
-| **Cerrar semana 27-29 jun el domingo 29 de junio** | ⏳ **Próximo — acción de Lucas el domingo** |
-| **Evaluar la primera decisión registrada del Laboratorio** (ya está pendiente de resultado) | ⏳ **Próximo — tras el cierre del 29 jun, el banner mostrará las decisiones evaluables** |
-| **Reimportar Meta Ads semanalmente** con el CSV semanal de Meta Ads Manager | ⏳ **En curso — importar cada semana nueva al finalizar el período** |
-| **Continuar midiendo merma** — cargar conteos reales los 4 ingredientes controlados | ⏳ **En curso — Lucas y el equipo deben cargar inicio de semana + cierre de cada noche** |
+| Identidad de Git configurada globalmente | ✅ Completo |
+| **Métricas de equipo: faltantes con producto + precio congelado + quejas con texto libre** | ✅ **Completo** |
+| **Métricas de equipo: % de pedidos con error (admin + empleado)** | ✅ **Completo esta sesión** |
+| **Fix RLS: `pedidosEnPeriodo` visible para empleados (fetchImpIds con adminClient)** | ✅ **Completo esta sesión** |
+| **Fix padding tabla métricas del empleado (columnas Semana/Mensajes pegadas)** | ✅ **Completo esta sesión** |
+| **Fix gastos: fecha default usa domingo del período (no UTC de new Date())** | ✅ **Completo esta sesión** |
+| **Fix cierre: botón "Cerrar semana" aparece el lunes aunque esActual=true** | ✅ **Completo esta sesión** |
+| **Cerrar semana 27-29 jun 2026** | ⏳ **Habilitado — Lucas puede cerrarlo ahora desde el dashboard** |
+| **Evaluar decisiones del Laboratorio** tras el cierre de 27-29 jun | ⏳ **Pendiente — el banner aparecerá al cerrar** |
+| **Reimportar Meta Ads semanalmente** con el CSV semanal | ⏳ En curso |
+| **Continuar midiendo merma** — cargar conteos reales 4 ingredientes controlados | ⏳ En curso |
 | Evaluar módulo de stock con datos reales (¿ajustar umbrales del semáforo?) | ⏳ Pendiente, depende de 3 semanas de medición |
 | Reimportar las 3 semanas históricas cerradas desde Meta Ads (procedimiento 15.5) | ⏳ Pendiente — acción de Lucas, necesita CSV históricos y tipo de cambio de cada semana |
 | Próxima etapa grande de funcionalidad nueva | ⏳ Sin especificar (sección 16) — conversar con Lucas primero |
@@ -720,7 +804,9 @@ No hay una etapa grande sin especificar pendiente. Lo que sigue es operar lo ya 
 
 ### Archivos clave a revisar antes de empezar:
 - `src/app/(admin)/dashboard/actions.ts` — `KpisPeriodo`, `calcularKpis()`, `obtenerSaludClientes()`
-- `src/app/(admin)/dashboard/page.tsx` — 3 zonas, `KpiCardHero`, `ZonaDivisor`, `SeccionColapsable`
+- `src/app/(admin)/dashboard/page.tsx` — 3 zonas, `KpiCardHero`, `ZonaDivisor`, `SeccionColapsable`, `semanaTerminada`
+- `src/app/(admin)/equipo/actions.ts` — `FaltanteItem`, `QuejaItem`, `fetchImpIds()`, `guardarMetricasPeriodo`
+- `src/app/(admin)/equipo/page.tsx` — `FormMetricas` con listas dinámicas y % error en tiempo real
 - `src/app/(admin)/laboratorio/actions.ts` — flujo de IA + evaluación automática + regla caliente/fría
 - `src/app/(admin)/gastos/actions-meta-ads.ts` — importación de Meta Ads + detalle por conjunto
 - `src/lib/utils/meta-ads-parser.ts` — parser con `MetaAdsFilaDetalle` y `conjuntosDetectados`
@@ -747,9 +833,10 @@ git push origin main # dispara auto-deploy en Vercel
 ### Cómo entregar código:
 - Siempre verificar que compila (`npx next build`) antes de entregar.
 - Cuando se toca `dashboard/actions.ts`, siempre revisar `dashboard/page.tsx` al mismo tiempo.
-- Si se toca `gastos/actions-meta-ads.ts` o `meta-ads-parser.ts`, revisar si `laboratorio/actions.ts` (que lee de ambos) necesita actualizarse.
+- Si se toca `gastos/actions-meta-ads.ts` o `meta-ads-parser.ts`, revisar si `laboratorio/actions.ts` necesita actualizarse.
 - Si se toca `stock/actions.ts`, revisar si `ConteoForm.tsx` necesita el mismo cambio.
 - Nunca usar `new Date()` directamente en JSX.
+- Nunca usar `new Date().toISOString().split('T')[0]` para la fecha local — usar fecha local explícita.
 - Nunca usar `await import(...)` dentro de componentes React.
 - Nunca usar separadores Unicode (═══) en archivos SQL.
 - Nunca editar una migración ya aplicada — agregar una nueva.
@@ -775,8 +862,11 @@ Confirmar con `git ls-remote origin main` que GitHub tiene el commit. Si lo tien
 9. **Desactivar un usuario** requiere banear a nivel Auth además de actualizar `usuarios.activo`.
 10. **Unidades mixtas en stock:** si se agrega cualquier cálculo que combine `conteos_stock` con `compras_ingredientes`, convertir cada término individualmente — nunca sumar primero y convertir al final.
 11. **No instalar herramientas de testing como dependencia permanente.** Playwright se instala con `--no-save` cada vez.
-12. **`gastos_operativos` no tiene guard de período cerrado.** Un borrado accidental de un gasto real no avisa que esa semana ya está congelada en `periodos`. Si se necesita evitar ediciones accidentales en el futuro, consultarlo con Lucas.
-13. **`meta_ads_detalle` tipo_audiencia CHECK ('caliente', 'fría'):** si se agregan nuevos tipos de audiencia en el futuro, hay que agregar una migración que extienda el CHECK — no alcanza con pasar el nuevo valor desde código.
-14. **`conjuntosDetectados` en el parser** solo incluye conjuntos de filas con actividad real (gasto > 0 OR conversaciones > 0). Si un conjunto importado antes de esta feature aparece en el CSV con todo en cero, no aparecerá en el paso 2 del formulario — comportamiento correcto.
-15. **Regenerar recomendaciones del Laboratorio** borra todas las `'sugeridas'` del período antes de insertar las nuevas. Si Lucas registró una `'decidida'` en esa sesión y luego regurgita, las decididas/evaluadas no se tocan. No hay riesgo.
+12. **`gastos_operativos` no tiene guard de período cerrado.** Un borrado accidental de un gasto real no avisa que esa semana ya está congelada en `periodos`.
+13. **`meta_ads_detalle` tipo_audiencia CHECK ('caliente', 'fría'):** si se agregan nuevos tipos de audiencia, hay que agregar una migración que extienda el CHECK.
+14. **`conjuntosDetectados` en el parser** solo incluye conjuntos de filas con actividad real (gasto > 0 OR conversaciones > 0).
+15. **Regenerar recomendaciones del Laboratorio** borra todas las `'sugeridas'` del período antes de insertar nuevas. Las decididas/evaluadas no se tocan. No hay riesgo.
 16. **El force-push a una rama con auto-deploy puede no disparar un build en Vercel.** Ver sección 18.
+17. **`obtenerGastosPeriodo` filtra estrictamente Vie-Dom** (`fecha >= viernes AND fecha <= domingo`). Si el usuario carga un gasto con fecha de lunes o martes, el gasto se guarda pero no aparece en la vista del período actual — el campo "Se asigna al período" ya informa el período destino. Pendiente evaluar si conviene extender el filtro (sección 16).
+18. **`semanaTerminada` usa fecha local del browser.** Si el browser tiene el reloj mal configurado, el botón de cierre podría aparecer o no aparecer incorrectamente. Caso extremo, poco probable.
+19. **`pedidosEnPeriodo` en métricas** se calcula con admin client en cada carga. Para el histórico, se usa una sola query de pedidos cubriendo todo el rango — costo O(1) en queries adicionales, O(períodos × pedidos) en procesamiento en TS. No debería ser un problema en los volúmenes actuales (~900 pedidos).
