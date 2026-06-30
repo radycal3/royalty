@@ -389,9 +389,15 @@ function FormGasto({
     initial?.categoria ?? 'publicidad'
   );
   const [tipo, setTipo] = useState<TipoGasto>(initial?.tipo ?? 'variable');
-  const [fecha, setFecha] = useState(
-    initial?.fecha ?? new Date().toISOString().split('T')[0]
-  );
+  const [fecha, setFecha] = useState(() => {
+    if (initial?.fecha) return initial.fecha;
+    // Usar el último día del período actual (domingo) como fecha por defecto.
+    // new Date().toISOString() daría la fecha en UTC — en Argentina (UTC-3)
+    // después de las 21:00 devuelve el día siguiente.
+    if (periodoActual?.fechaHasta) return periodoActual.fechaHasta;
+    const hoy = new Date();
+    return `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}-${String(hoy.getDate()).padStart(2, '0')}`;
+  });
   const [periodoAsignado, setPeriodoAsignado] = useState<string | null>(null);
 
   // Calcular período asignado cuando cambia la fecha

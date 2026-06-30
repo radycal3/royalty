@@ -2248,7 +2248,8 @@ export default function DashboardPage() {
 
   // ── Flujo de cierre de período ──────────────────────────────────────
 
-  const semanaTerminada = tipoSeleccionado === 'semana' && !rango.esActual;
+  const hoyLocalStr = (() => { const h = new Date(); return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}-${String(h.getDate()).padStart(2, '0')}`; })();
+  const semanaTerminada = tipoSeleccionado === 'semana' && (!rango.esActual || rango.hasta < hoyLocalStr);
 
   async function abrirModalCierre() {
     if (!kpis) return;
