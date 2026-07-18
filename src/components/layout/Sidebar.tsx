@@ -17,6 +17,7 @@ import {
   Crown,
   UtensilsCrossed,
   UserCog,
+  Phone,
 } from 'lucide-react'
 
 const nav = [
@@ -30,6 +31,7 @@ const nav = [
   { href: '/consumo-interno', label: 'Consumo interno', icon: UtensilsCrossed },
   { href: '/cadetes', label: 'Cadetes', icon: Bike },
   { href: '/laboratorio', label: 'Laboratorio', icon: FlaskConical },
+  { href: '/clientes/exportar', label: 'Exportar clientes', icon: Phone },
 ]
 
 export default function Sidebar() {
