@@ -4,11 +4,12 @@ import { createClient } from '@/lib/supabase/server';
 import Anthropic from '@anthropic-ai/sdk';
 import { z } from 'zod';
 import { zodOutputFormat } from '@anthropic-ai/sdk/helpers/zod';
-import { calcularKpis, obtenerSaludClientes } from '../dashboard/actions';
+import { calcularKpis } from '../dashboard/actions';
 import { obtenerAnalisisMerma } from '../stock/actions';
-import { obtenerMetricasHistorico, obtenerMetricasPeriodo } from '../equipo/actions';
-import { obtenerMetaAdsPeriodo, obtenerDetalleMetaAds } from '../gastos/actions-meta-ads';
+import { obtenerMetricasPeriodo } from '../equipo/actions';
+import { obtenerMetaAdsPeriodo } from '../gastos/actions-meta-ads';
 import { formatARS } from '@/lib/utils/format';
+import { construirContextoSemana } from '@/lib/reportes/contexto-semana';
 
 // ─── Types ─────────────────────────────────────────────────────────────────
 
@@ -389,82 +390,6 @@ El campo "metaAds.porConjunto" muestra cada conjunto de anuncios con su "tipoAud
 - Solo compará costo por conversación entre conjuntos del MISMO tipo de audiencia.
 - Al recomendar escalar o pausar un conjunto, basate en: costo por conversación vs otros del mismo tipo, CTR, y contexto financiero general.`;
 
-async function construirContextoKpis(supabase: any, desde: string, hasta: string) {
-  const kpis = await calcularKpis(supabase, desde, hasta);
-  const salud = await obtenerSaludClientes();
-
-  let merma: unknown = 'sin_datos_todavia';
-  try {
-    const analisis = await obtenerAnalisisMerma(desde, hasta);
-    const completos = analisis.ingredientes.filter((i) => i.datosCompletos);
-    if (completos.length > 0) {
-      merma = completos.map((i) => ({
-        ingrediente: i.nombre,
-        mermaPct: i.mermaPct,
-        semaforo: i.semaforo,
-      }));
-    }
-  } catch {
-    merma = 'sin_datos_todavia';
-  }
-
-  const metricasRecientes = await obtenerMetricasHistorico(8);
-  const metricaSemana = metricasRecientes.find((m) => m.periodoDesde === desde) ?? null;
-
-  const metaAdsSemana = await obtenerMetaAdsPeriodo(desde);
-  const detalleConjuntos = await obtenerDetalleMetaAds(desde);
-
-  return {
-    periodo: { desde, hasta },
-    financiero: {
-      ventas: kpis.ventas,
-      costoIngredientes: kpis.costoIngredientes,
-      beneficioBruto: kpis.beneficioBruto,
-      margenBruto: kpis.margenBruto,
-      gastosVariables: kpis.gastosVariables,
-      gastosFijos: kpis.gastosFijos,
-      gastoPublicidad: kpis.gastoPublicidad,
-      publicidadPct: kpis.publicidadPct,
-      roas: kpis.roas,
-      costoConsumoInterno: kpis.costoConsumoInterno,
-      resultadoDelivery: kpis.resultadoDelivery,
-      beneficioNeto: kpis.beneficioNeto,
-      margenNeto: kpis.margenNeto,
-      ticketPromedio: kpis.ticketPromedio,
-      pedidos: kpis.pedidos,
-      hamburguesasVendidas: kpis.hamburguesasVendidas,
-      pctVentasRepetidores: kpis.pctVentasRepetidores,
-    },
-    clientes: {
-      retencionCartera: salud.retencionCartera,
-      tasaRetencion: salud.tasaRetencion,
-      altoValorEnRiesgo: salud.altoValorEnRiesgo,
-      nuevosEnRiesgoEstaSemana: salud.nuevosEnRiesgoDetalle.length,
-      pctFacturacionRepetidores: salud.pctFacturacionRepetidores,
-    },
-    equipo: metricaSemana
-      ? {
-          mensajesRecibidos: metricaSemana.mensajesRecibidos,
-          mensajesConvertidos: metricaSemana.mensajesConvertidos,
-          tiempoPromedioProduccionMin: metricaSemana.tiempoPromedioProduccionMin,
-          quejasFaltantes: metricaSemana.quejasFaltantes,
-          quejasCalidad: metricaSemana.quejasCalidad,
-        }
-      : 'sin_datos_todavia',
-    metaAds: metaAdsSemana
-      ? {
-          gastoUsd: metaAdsSemana.gastoUsd,
-          alcance: metaAdsSemana.alcance,
-          impresiones: metaAdsSemana.impresiones,
-          clics: metaAdsSemana.clics,
-          resultados: metaAdsSemana.resultados,
-          porConjunto: detalleConjuntos,
-        }
-      : 'sin_datos_todavia',
-    merma,
-  };
-}
-
 export async function generarRecomendaciones(desde: string, hasta: string) {
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
@@ -474,7 +399,7 @@ export async function generarRecomendaciones(desde: string, hasta: string) {
     return { error: 'Falta configurar ANTHROPIC_API_KEY en las variables de entorno.' };
   }
 
-  const contexto = await construirContextoKpis(supabase, desde, hasta);
+  const contexto = await construirContextoSemana(supabase, desde, hasta);
 
   const client = new Anthropic();
 

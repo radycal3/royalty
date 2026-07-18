@@ -28,7 +28,7 @@ function toDate(s: string): Date {
   return new Date(s + 'T12:00:00');
 }
 
-function periodoDeJS(fecha: Date): Date {
+export function periodoDeJS(fecha: Date): Date {
   const day = fecha.getDay();
   const isodow = day === 0 ? 7 : day;
   const offset = ((isodow - 5 + 7) % 7);

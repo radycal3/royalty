@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState, useTransition } from 'react';
 import Link from 'next/link';
 import { contarDecisionesEvaluablesTrasCierre } from '../laboratorio/actions';
+import { generarInformeMensual } from './actions-informe';
 import {
   buildRangoSemana,
   buildRangoMes,
@@ -2035,6 +2036,7 @@ export default function DashboardPage() {
   const [, startTransition] = useTransition();
 
   const [rankingTab, setRankingTab] = useState<RankingTab>('vendidos');
+  const [generandoInforme, setGenerandoInforme] = useState(false);
 
   // Inputs de fecha para "Personalizado"
   const [desdeInput, setDesdeInput] = useState(rango.desde);
@@ -2298,6 +2300,36 @@ export default function DashboardPage() {
     }
   }
 
+  async function exportarInformeMensual() {
+    setGenerandoInforme(true);
+    try {
+      const r = await generarInformeMensual(rango.desde, rango.hasta, rango.label);
+      if ('error' in r) {
+        showToast(r.error, 'error');
+        return;
+      }
+
+      const blob = new Blob([r.texto], { type: 'text/markdown;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `informe-royalty-${rango.desde}.md`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      try {
+        await navigator.clipboard.writeText(r.texto);
+        showToast('Informe copiado al portapapeles y descargado');
+      } catch {
+        showToast('Informe descargado (no se pudo copiar al portapapeles automáticamente)');
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : 'Error al generar el informe', 'error');
+    } finally {
+      setGenerandoInforme(false);
+    }
+  }
+
   return (
     <div className="space-y-6" id="dashboard-root">
       {/* ── Cabecera visible solo en impresión ──────────────────────── */}
@@ -2348,6 +2380,16 @@ export default function DashboardPage() {
             >
               ↓ Exportar PDF
             </button>
+            {tipoSeleccionado === 'mes' && (
+              <button
+                onClick={exportarInformeMensual}
+                disabled={generandoInforme}
+                className="flex items-center gap-1.5 rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary hover:bg-surface-alt hover:text-text-primary disabled:opacity-50"
+                title="Informe del mes dividido por semana operativa, listo para copiar y pegar en un chat con Claude"
+              >
+                {generandoInforme ? 'Generando…' : '🤖 Informe para IA'}
+              </button>
+            )}
           </div>
 
           {/* Selector de tipo de rango */}
