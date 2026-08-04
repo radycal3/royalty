@@ -10,6 +10,7 @@ import {
   getProductoCompleto,
   crearProducto,
   actualizarProducto,
+  eliminarProducto,
   duplicarProducto,
   agregarPrecio,
   agregarItemReceta,
@@ -50,6 +51,7 @@ const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref
   const [costoCalc, setCostoCalc] = useState<CostoCalc | null>(null)
   const [showNew, setShowNew] = useState(false)
   const [duplicando, setDuplicando] = useState<ProductoConMetricas | null>(null)
+  const [confirmandoEliminarId, setConfirmandoEliminarId] = useState<string | null>(null)
   const [pending, startTransition] = useTransition()
   const { show, Toast } = useToast()
   const requestId = useRef(0)
@@ -169,6 +171,16 @@ const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref
     })
   }
 
+  async function handleEliminar(prod: ProductoConMetricas) {
+    startTransition(async () => {
+      const r = await eliminarProducto(prod.id)
+      if (r.error) { show(r.error, 'error'); setConfirmandoEliminarId(null); return }
+      show(`"${prod.nombre}" eliminado`)
+      setConfirmandoEliminarId(null)
+      await loadProductos()
+    })
+  }
+
   async function handleToggleActivo(prod: ProductoConMetricas) {
     startTransition(async () => {
       const fd = new FormData()
@@ -279,14 +291,29 @@ const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref
                     <Badge color={p.activo ? 'green' : 'gray'}>{p.activo ? 'Activo' : 'Inactivo'}</Badge>
                   </td>
                   <td className="px-2 py-3">
-                    <div className="flex items-center justify-end gap-1">
-                      <button onClick={(e) => { e.stopPropagation(); setDuplicando(p) }} title="Duplicar producto" className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
-                        <Copy className="w-4 h-4" />
-                      </button>
-                      <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(p) }} title={p.activo ? 'Archivar' : 'Reactivar'} className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
-                        {p.activo ? <Archive className="w-4 h-4" /> : <ArchiveRestore className="w-4 h-4" />}
-                      </button>
-                    </div>
+                    {confirmandoEliminarId === p.id ? (
+                      <div onClick={(e) => e.stopPropagation()} className="flex items-center justify-end gap-1.5 whitespace-nowrap">
+                        <span className="text-[11px] text-negative">¿Eliminar del todo?</span>
+                        <button onClick={() => handleEliminar(p)} disabled={pending} className="rounded-md bg-negative px-2 py-1 text-[11px] font-medium text-white hover:opacity-90">
+                          {pending ? '...' : 'Sí, eliminar'}
+                        </button>
+                        <button onClick={() => setConfirmandoEliminarId(null)} disabled={pending} className="rounded-md border border-border px-2 py-1 text-[11px] text-text-secondary hover:bg-surface-alt">
+                          Cancelar
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-center justify-end gap-1">
+                        <button onClick={(e) => { e.stopPropagation(); setDuplicando(p) }} title="Duplicar producto" className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
+                          <Copy className="w-4 h-4" />
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(p) }} title={p.activo ? 'Archivar' : 'Reactivar'} className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
+                          {p.activo ? <Archive className="w-4 h-4" /> : <ArchiveRestore className="w-4 h-4" />}
+                        </button>
+                        <button onClick={(e) => { e.stopPropagation(); setConfirmandoEliminarId(p.id) }} title="Eliminar permanentemente" className="p-1.5 rounded-lg text-text-muted hover:text-negative hover:bg-surface-alt transition-colors">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    )}
                   </td>
                 </tr>
               ))}

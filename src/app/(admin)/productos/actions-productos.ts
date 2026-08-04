@@ -204,6 +204,39 @@ export async function duplicarProducto(id: string, nuevoNombre: string) {
   return { data: nuevo }
 }
 
+// Borra un producto por completo, solo si nunca tuvo actividad real (sin
+// eso, "productos_precios" y "pedidos_lineas" tienen ON DELETE RESTRICT en
+// la base — el borrado fallaría de todos modos). Para productos con
+// historial real, la vía correcta sigue siendo archivar (actualizarProducto
+// con activo=false), que preserva el principio de congelación histórica
+// (sección 2.1/2.2 del handoff). Esto es solo para limpiar productos
+// creados por error (ej. pruebas) que nunca se vendieron.
+export async function eliminarProducto(id: string) {
+  const supabase = await createClient()
+
+  const [{ count: countPedidos }, { count: countConsumo }, { count: countFaltantes }] = await Promise.all([
+    supabase.from('pedidos_lineas').select('id', { count: 'exact', head: true }).eq('producto_id', id),
+    supabase.from('consumo_interno_lineas').select('id', { count: 'exact', head: true }).eq('producto_id', id),
+    supabase.from('metricas_faltantes_detalle').select('id', { count: 'exact', head: true }).eq('producto_id', id),
+  ])
+
+  const totalUsos = (countPedidos ?? 0) + (countConsumo ?? 0) + (countFaltantes ?? 0)
+  if (totalUsos > 0) {
+    return {
+      error: `No se puede eliminar: tiene ${countPedidos ?? 0} línea(s) de pedidos, ${countConsumo ?? 0} de consumo interno y ${countFaltantes ?? 0} de faltantes registradas. Archivalo en su lugar para sacarlo de la vista sin perder el historial.`,
+    }
+  }
+
+  // Sin ninguna actividad real: acá sí se borra el precio (append-only
+  // solo tiene sentido para auditar ventas reales, y no hubo ninguna).
+  await supabase.from('productos_precios').delete().eq('producto_id', id)
+  const { error } = await supabase.from('productos').delete().eq('id', id)
+  if (error) return { error: error.message }
+
+  revalidatePath('/productos')
+  return { success: true }
+}
+
 export async function actualizarProducto(id: string, formData: FormData) {
   const supabase = await createClient()
   const nombre = formData.get('nombre') as string
