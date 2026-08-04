@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useRef, useTransition, forwardRef, useImperativeHandle } from 'react'
-import { Plus, Search, Trash2, Archive, ArchiveRestore, Download } from 'lucide-react'
+import { Plus, Search, Trash2, Archive, ArchiveRestore, Download, Copy } from 'lucide-react'
 import { SidePanel, Field, Input, Select, Button, Badge, EmptyState, useToast } from '@/components/ui'
 import { formatARS, formatPercent, formatDate } from '@/lib/utils/format'
 import { exportToExcel } from '@/lib/utils/export'
@@ -10,6 +10,7 @@ import {
   getProductoCompleto,
   crearProducto,
   actualizarProducto,
+  duplicarProducto,
   agregarPrecio,
   agregarItemReceta,
   eliminarItemReceta,
@@ -48,6 +49,7 @@ const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref
   } | null>(null)
   const [costoCalc, setCostoCalc] = useState<CostoCalc | null>(null)
   const [showNew, setShowNew] = useState(false)
+  const [duplicando, setDuplicando] = useState<ProductoConMetricas | null>(null)
   const [pending, startTransition] = useTransition()
   const { show, Toast } = useToast()
   const requestId = useRef(0)
@@ -151,6 +153,19 @@ const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref
       if (r.error) { show(r.error, 'error'); return }
       show('Alias eliminado')
       await loadDetalle(selectedId)
+    })
+  }
+
+  async function handleDuplicar(fd: FormData) {
+    if (!duplicando) return
+    const nuevoNombre = fd.get('nombre') as string
+    startTransition(async () => {
+      const r = await duplicarProducto(duplicando.id, nuevoNombre)
+      if (r.error) { show(r.error, 'error'); return }
+      show(`"${nuevoNombre}" creado con la receta de "${duplicando.nombre}"`)
+      setDuplicando(null)
+      await loadProductos()
+      if (r.data) handleOpenDetalle(r.data.id)
     })
   }
 
@@ -264,9 +279,14 @@ const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref
                     <Badge color={p.activo ? 'green' : 'gray'}>{p.activo ? 'Activo' : 'Inactivo'}</Badge>
                   </td>
                   <td className="px-2 py-3">
-                    <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(p) }} title={p.activo ? 'Archivar' : 'Reactivar'} className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
-                      {p.activo ? <Archive className="w-4 h-4" /> : <ArchiveRestore className="w-4 h-4" />}
-                    </button>
+                    <div className="flex items-center justify-end gap-1">
+                      <button onClick={(e) => { e.stopPropagation(); setDuplicando(p) }} title="Duplicar producto" className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
+                        <Copy className="w-4 h-4" />
+                      </button>
+                      <button onClick={(e) => { e.stopPropagation(); handleToggleActivo(p) }} title={p.activo ? 'Archivar' : 'Reactivar'} className="p-1.5 rounded-lg text-text-muted hover:text-text-primary hover:bg-surface-alt transition-colors">
+                        {p.activo ? <Archive className="w-4 h-4" /> : <ArchiveRestore className="w-4 h-4" />}
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -277,6 +297,20 @@ const ProductosTab = forwardRef<ProductosTabHandle>(function ProductosTab(_, ref
 
       <SidePanel open={showNew} onClose={() => setShowNew(false)} title="Nuevo producto">
         <FormProducto onSubmit={handleCrear} pending={pending} isNew />
+      </SidePanel>
+
+      <SidePanel open={!!duplicando} onClose={() => setDuplicando(null)} title={`Duplicar "${duplicando?.nombre ?? ''}"`}>
+        {duplicando && (
+          <form key={duplicando.id} action={handleDuplicar} className="space-y-4">
+            <p className="text-sm text-text-secondary">
+              Se crea un producto nuevo con la misma receta (ingredientes y cantidades) y el mismo precio de venta de "{duplicando.nombre}". Después podés editar lo que cambie.
+            </p>
+            <Field label="Nombre del nuevo producto">
+              <Input name="nombre" required defaultValue={`${duplicando.nombre} (copia)`} autoFocus />
+            </Field>
+            <Button type="submit" disabled={pending}>Duplicar producto</Button>
+          </form>
+        )}
       </SidePanel>
 
       <SidePanel open={!!selectedId} onClose={() => { setSelectedId(null); setDetalle(null); setCostoCalc(null) }} title={detalle?.producto?.nombre ?? 'Cargando...'}>

@@ -136,6 +136,74 @@ export async function crearProducto(formData: FormData) {
   return { data: producto }
 }
 
+// Duplica un producto existente: mismo categoria, copia la receta completa
+// (ingrediente + cantidad) y el precio vigente (si tiene). No copia los
+// alias de mapeo_pedix — son específicos del nombre que usa Pedix para el
+// producto original y `nombre_pedix` es único, así que copiarlos chocaría
+// contra esa restricción.
+export async function duplicarProducto(id: string, nuevoNombre: string) {
+  const supabase = await createClient()
+
+  const { data: original, error: errorOriginal } = await supabase
+    .from('productos')
+    .select('categoria')
+    .eq('id', id)
+    .single()
+  if (errorOriginal || !original) {
+    return { error: errorOriginal?.message || 'Producto original no encontrado' }
+  }
+
+  const { data: nuevo, error: errorNuevo } = await supabase
+    .from('productos')
+    .insert({ nombre: nuevoNombre, categoria: original.categoria })
+    .select()
+    .single()
+  if (errorNuevo) return { error: errorNuevo.message }
+
+  const { data: receta } = await supabase
+    .from('recetas')
+    .select('ingrediente_id, cantidad')
+    .eq('producto_id', id)
+
+  if (receta && receta.length > 0) {
+    const filas = receta.map((r) => ({
+      producto_id: nuevo.id,
+      ingrediente_id: r.ingrediente_id,
+      cantidad: r.cantidad,
+    }))
+    const { error: errorReceta } = await supabase.from('recetas').insert(filas)
+    if (errorReceta) {
+      revalidatePath('/productos')
+      return {
+        error: `Producto "${nuevoNombre}" creado, pero falló al copiar la receta: ${errorReceta.message}`,
+        data: nuevo,
+      }
+    }
+  }
+
+  const hoy = new Date().toISOString().split('T')[0]
+  const { data: precioVigente } = await supabase
+    .from('productos_precios')
+    .select('precio')
+    .eq('producto_id', id)
+    .lte('fecha_vigencia', hoy)
+    .order('fecha_vigencia', { ascending: false })
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+
+  if (precioVigente && precioVigente.precio > 0) {
+    await supabase.from('productos_precios').insert({
+      producto_id: nuevo.id,
+      precio: precioVigente.precio,
+      fecha_vigencia: hoy,
+    })
+  }
+
+  revalidatePath('/productos')
+  return { data: nuevo }
+}
+
 export async function actualizarProducto(id: string, formData: FormData) {
   const supabase = await createClient()
   const nombre = formData.get('nombre') as string

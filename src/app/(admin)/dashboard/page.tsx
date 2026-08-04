@@ -1814,7 +1814,15 @@ function bgMargen(margen: number, bandas: BandasMargen | null): string {
   return 'bg-negative-bg';
 }
 
-function AccionEliminarCierre({ periodo, onEliminado }: { periodo: PeriodoCerrado; onEliminado: () => void }) {
+function AccionEliminarCierre({
+  periodo,
+  onEliminado,
+  compact = false,
+}: {
+  periodo: PeriodoCerrado;
+  onEliminado: () => void;
+  compact?: boolean;
+}) {
   const [confirmando, setConfirmando] = useState(false);
   const [pending, setPending] = useState(false);
   const { show, Toast } = useToast();
@@ -1824,7 +1832,7 @@ function AccionEliminarCierre({ periodo, onEliminado }: { periodo: PeriodoCerrad
     const r = await eliminarCierre(periodo.id);
     setPending(false);
     if (!r.ok) { show(r.mensaje, 'error'); return; }
-    show('Cierre eliminado. Podés corregir los gastos y volver a cerrar la semana.');
+    show('Semana reabierta. Podés corregir los datos y volver a cerrarla cuando quieras.');
     setConfirmando(false);
     onEliminado();
   }
@@ -1832,13 +1840,13 @@ function AccionEliminarCierre({ periodo, onEliminado }: { periodo: PeriodoCerrad
   if (confirmando) {
     return (
       <div className="flex items-center justify-end gap-2 whitespace-nowrap">
-        <span className="text-[11px] text-negative">¿Borrar el snapshot de esta semana?</span>
+        <span className="text-[11px] text-negative">¿Reabrir esta semana para corregirla?</span>
         <button
           onClick={handleConfirmar}
           disabled={pending}
           className="rounded-md bg-negative px-2 py-1 text-[11px] font-medium text-white hover:opacity-90"
         >
-          {pending ? '...' : 'Sí, eliminar'}
+          {pending ? '...' : 'Sí, reabrir'}
         </button>
         <button
           onClick={() => setConfirmando(false)}
@@ -1856,10 +1864,12 @@ function AccionEliminarCierre({ periodo, onEliminado }: { periodo: PeriodoCerrad
     <div className="flex items-center justify-end">
       <button
         onClick={() => setConfirmando(true)}
-        className="text-[11px] text-text-muted underline underline-offset-2 hover:text-negative"
-        title="Elimina el cierre congelado de esta semana para poder corregirla y volver a cerrarla"
+        className={compact
+          ? 'text-[11px] text-text-muted underline underline-offset-2 hover:text-negative'
+          : 'rounded-md border border-border px-3 py-1.5 text-xs text-text-secondary hover:border-negative hover:text-negative'}
+        title="Borra el cierre congelado de esta semana para poder corregir los datos y volver a cerrarla"
       >
-        Eliminar cierre
+        Reabrir semana
       </button>
       <Toast />
     </div>
@@ -1966,7 +1976,7 @@ function TabTablaSemanal({
                   {formatARS(p.ticketPromedio)}
                 </td>
                 <td className="px-3 py-2 text-right">
-                  <AccionEliminarCierre periodo={p} onEliminado={onEliminado} />
+                  <AccionEliminarCierre periodo={p} onEliminado={onEliminado} compact />
                 </td>
               </tr>
             ))}
@@ -2489,10 +2499,19 @@ export default function DashboardPage() {
 
           {semanaTerminada &&
             (periodoCerradoActual ? (
-              <span className="rounded-full bg-positive-bg px-3 py-1.5 text-xs font-medium text-positive">
-                ✓ Cerrada el{' '}
-                {new Date(periodoCerradoActual.cerradoEn).toLocaleDateString('es-AR')}
-              </span>
+              <>
+                <span className="rounded-full bg-positive-bg px-3 py-1.5 text-xs font-medium text-positive">
+                  ✓ Cerrada el{' '}
+                  {new Date(periodoCerradoActual.cerradoEn).toLocaleDateString('es-AR')}
+                </span>
+                <AccionEliminarCierre
+                  periodo={periodoCerradoActual}
+                  onEliminado={() => {
+                    setPeriodoCerradoActual(null);
+                    loadEvolucion();
+                  }}
+                />
+              </>
             ) : (
               <button
                 onClick={abrirModalCierre}
