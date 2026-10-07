@@ -8,6 +8,7 @@ import {
   MODELO_INFORME,
   MODELO_CHAT,
 } from '@/lib/laboratorio/prompts';
+import { TOOLS, ejecutarTool } from '@/lib/laboratorio/tools';
 
 export const maxDuration = 120; // la generación del informe (Opus) puede tardar
 
@@ -89,12 +90,44 @@ export async function POST(req: Request) {
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       try {
-        const s = anthropic.messages.stream({ model, max_tokens: 4096, system, messages: apiMessages });
-        for await (const ev of s) {
-          if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
-            full += ev.delta.text;
-            controller.enqueue(encoder.encode(ev.delta.text));
+        const convMessages: Anthropic.MessageParam[] = [...apiMessages];
+        let rondas = 0;
+        while (true) {
+          rondas++;
+          const s = anthropic.messages.stream({
+            model,
+            max_tokens: 4096,
+            system,
+            messages: convMessages,
+            // Herramientas de drill-down solo en el chat (el informe es closed-book
+            // sobre el contexto completo). Tope de rondas para no ciclar.
+            ...(esInforme ? {} : { tools: TOOLS }),
+          });
+          for await (const ev of s) {
+            if (ev.type === 'content_block_delta' && ev.delta.type === 'text_delta') {
+              full += ev.delta.text;
+              controller.enqueue(encoder.encode(ev.delta.text));
+            }
           }
+          const finalMsg = await s.finalMessage();
+          if (finalMsg.stop_reason === 'tool_use' && rondas <= 5) {
+            convMessages.push({ role: 'assistant', content: finalMsg.content });
+            const toolResults: Anthropic.ToolResultBlockParam[] = [];
+            for (const block of finalMsg.content) {
+              if (block.type !== 'tool_use') continue;
+              controller.enqueue(encoder.encode(`\n\n🔎 Consultando datos (${block.name})…\n\n`));
+              let resultado: unknown;
+              try {
+                resultado = await ejecutarTool(admin, block.name, block.input);
+              } catch (e) {
+                resultado = { error: e instanceof Error ? e.message : 'error' };
+              }
+              toolResults.push({ type: 'tool_result', tool_use_id: block.id, content: JSON.stringify(resultado) });
+            }
+            convMessages.push({ role: 'user', content: toolResults });
+            continue;
+          }
+          break;
         }
         if (full.trim()) {
           await admin.from('laboratorio_mensajes').insert({
