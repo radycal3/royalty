@@ -1,6 +1,7 @@
 'use server';
 
 import { createClient } from '@/lib/supabase/server';
+import { createAdminClient } from '@/lib/supabase/admin';
 import { rangoAnterior, type Rango } from '@/lib/dashboard/rangos';
 
 // ─── Types de datos (no de rango — esos viven en lib/dashboard/rangos.ts) ──
@@ -177,6 +178,12 @@ export async function calcularKpis(
   let gastoPublicidad = 0;
 
   for (const g of gastosData || []) {
+    // 'cadeteria' es legacy pre-Fase 4: el costo de cadetería ya entra por
+    // resultadoDelivery (cadetes_jornadas, Q4). Excluirlo acá evita contarlo
+    // DOS veces en el beneficio neto. Además alinea el cálculo con
+    // obtenerGastosDesglose, que ya marca esta categoría como legacy y afirma
+    // que "no participa del cálculo del beneficio neto".
+    if (g.categoria === 'cadeteria') continue;
     if (g.tipo === 'variable') gastosVariables += g.monto;
     else gastosFijos += g.monto;
     if (g.categoria === 'publicidad') gastoPublicidad += g.monto;
@@ -534,6 +541,15 @@ export async function obtenerSaludClientes(): Promise<SaludClientes> {
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) throw new Error('No autenticado');
+  // La RPC obtener_salud_clientes devuelve montos en pesos y PII de clientes.
+  // Verificar rol admin acá (defensa en profundidad, además del REVOKE de la
+  // función para empleados — ver migración de RLS).
+  const { data: yo } = await supabase
+    .from('usuarios')
+    .select('rol')
+    .eq('id', user.user.id)
+    .single();
+  if (yo?.rol !== 'admin') throw new Error('No autorizado');
 
   const { data: configRows } = await supabase
     .from('configuracion')
@@ -547,7 +563,11 @@ export async function obtenerSaludClientes(): Promise<SaludClientes> {
     10
   );
 
-  const { data, error } = await supabase.rpc('obtener_salud_clientes', {
+  // La RPC se ejecuta con admin client (service_role). Esto permite REVOCAR el
+  // EXECUTE a los empleados a nivel base (ver migración de RLS) sin romper este
+  // flujo admin — ya validado arriba con el chequeo de rol.
+  const admin = createAdminClient();
+  const { data, error } = await admin.rpc('obtener_salud_clientes', {
     p_ventana_dias: ventanaDias,
   });
 

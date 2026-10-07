@@ -5,7 +5,7 @@
 // que el informe exportable muestre exactamente lo mismo que ya "sabe" el
 // sistema, sin recalcular nada distinto.
 
-import { calcularKpis, obtenerSaludClientes } from '@/app/(admin)/dashboard/actions';
+import { calcularKpis, obtenerSaludClientes, type SaludClientes } from '@/app/(admin)/dashboard/actions';
 import { obtenerAnalisisMerma } from '@/app/(admin)/stock/actions';
 import { obtenerMetricasPeriodo } from '@/app/(admin)/equipo/actions';
 import { obtenerMetaAdsPeriodo, obtenerDetalleMetaAds, type MetaAdsConjuntoResumen } from '@/app/(admin)/gastos/actions-meta-ads';
@@ -62,31 +62,45 @@ export type ContextoSemana = {
     | 'sin_datos_todavia';
 };
 
-export async function construirContextoSemana(supabase: any, desde: string, hasta: string): Promise<ContextoSemana> {
-  const kpis = await calcularKpis(supabase, desde, hasta);
-  const salud = await obtenerSaludClientes();
-
-  let merma: ContextoSemana['merma'] = 'sin_datos_todavia';
-  try {
-    const analisis = await obtenerAnalisisMerma(desde, hasta);
-    const completos = analisis.ingredientes.filter((i) => i.datosCompletos);
-    if (completos.length > 0) {
-      merma = completos.map((i) => ({
-        ingrediente: i.nombre,
-        mermaPct: i.mermaPct,
-        semaforo: i.semaforo,
-      }));
+export async function construirContextoSemana(
+  supabase: any,
+  desde: string,
+  hasta: string,
+  // La salud de clientes es "estado actual" (no un corte por semana), así que
+  // el Informe mensual la calcula UNA sola vez y la pasa precomputada acá para
+  // no repetir la RPC más cara (obtener_salud_clientes) por cada semana del
+  // mes. El Laboratorio (una semana) la omite y se calcula sola.
+  saludPrecomputada?: SaludClientes
+): Promise<ContextoSemana> {
+  // Todas estas lecturas son independientes entre sí → se corren en paralelo
+  // en vez de en serie (antes eran 6 awaits encadenados).
+  const mermaPromise: Promise<ContextoSemana['merma']> = (async () => {
+    try {
+      const analisis = await obtenerAnalisisMerma(desde, hasta);
+      const completos = analisis.ingredientes.filter((i) => i.datosCompletos);
+      if (completos.length > 0) {
+        return completos.map((i) => ({
+          ingrediente: i.nombre,
+          mermaPct: i.mermaPct,
+          semaforo: i.semaforo,
+        }));
+      }
+      return 'sin_datos_todavia';
+    } catch {
+      return 'sin_datos_todavia';
     }
-  } catch {
-    merma = 'sin_datos_todavia';
-  }
+  })();
 
   // Fetch directo por período (no "últimas N semanas" + find), así el
   // contexto es correcto para cualquier semana histórica, no solo recientes.
-  const metricaSemana = await obtenerMetricasPeriodo(desde);
-
-  const metaAdsSemana = await obtenerMetaAdsPeriodo(desde);
-  const detalleConjuntos = await obtenerDetalleMetaAds(desde);
+  const [kpis, salud, merma, metricaSemana, metaAdsSemana, detalleConjuntos] = await Promise.all([
+    calcularKpis(supabase, desde, hasta),
+    saludPrecomputada ? Promise.resolve(saludPrecomputada) : obtenerSaludClientes(),
+    mermaPromise,
+    obtenerMetricasPeriodo(desde),
+    obtenerMetaAdsPeriodo(desde),
+    obtenerDetalleMetaAds(desde),
+  ]);
 
   return {
     periodo: { desde, hasta },

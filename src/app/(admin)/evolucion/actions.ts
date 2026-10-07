@@ -120,6 +120,15 @@ export async function cerrarPeriodo(
   const supabase = await createClient();
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) throw new Error('No autenticado');
+  // Cerrar un período inserta un snapshot con montos en pesos. Verificar rol
+  // admin (la policy de insert de periodos permitía 'empleado'; esto lo cierra
+  // a nivel server action — ver también migración de RLS).
+  const { data: yo } = await supabase
+    .from('usuarios')
+    .select('rol')
+    .eq('id', user.user.id)
+    .single();
+  if (yo?.rol !== 'admin') return { ok: false, mensaje: 'No autorizado' };
 
   if (rango.tipo !== 'semana') {
     return { ok: false, mensaje: 'Solo se pueden cerrar períodos de tipo semana.' };

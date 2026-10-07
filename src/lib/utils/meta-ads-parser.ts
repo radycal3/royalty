@@ -78,8 +78,18 @@ function parseLineaCsv(line: string, delimitador: string): string[] {
 }
 
 function findColumn(headers: string[], posiblesNombres: string[]): number {
+  // Coincidencia EXACTA primero (en orden de candidatos), después substring.
+  // Evita que un candidato corto ('resultados', 'impresiones', 'clics en el
+  // enlace') enganche una columna DERIVADA que lo contiene como substring
+  // ("Coste por resultados", "Costo por mil impresiones (CPM)", "CTR (tasa de
+  // clics en el enlace)") cuando la columna real existe — mismo tipo de bug
+  // que tenía el parser de Pedix.
   for (const nombre of posiblesNombres) {
-    const idx = headers.findIndex((h) => h === nombre || h.includes(nombre));
+    const idx = headers.findIndex((h) => h === nombre);
+    if (idx !== -1) return idx;
+  }
+  for (const nombre of posiblesNombres) {
+    const idx = headers.findIndex((h) => h.includes(nombre));
     if (idx !== -1) return idx;
   }
   return -1;
@@ -132,6 +142,20 @@ export function parseMetaAdsCsv(texto: string): MetaAdsParseResult {
   if (idxGasto === -1) {
     throw new Error(
       'No encontré la columna de gasto (esperaba algo como "Amount spent (USD)" o "Importe gastado (USD)"). Revisá que el CSV sea un export de Meta Ads Manager.'
+    );
+  }
+
+  // Guard de moneda: el sistema trata el gasto como USD y lo multiplica por el
+  // tipo de cambio. Si la columna de gasto trae un marcador de moneda que NO
+  // es USD (ej. "Importe gastado (ARS)" porque la cuenta de Meta está en
+  // pesos), tomarla como USD inflaría el gasto ~1000×. Mejor frenar con un
+  // error claro que cargar un disparate silencioso.
+  const monedaMatch = /\(([a-z]{3})\)/.exec(headers[idxGasto]);
+  if (monedaMatch && monedaMatch[1] !== 'usd') {
+    throw new Error(
+      `La columna de gasto detectada es "${headersRaw[idxGasto].trim()}" (moneda ${monedaMatch[1].toUpperCase()}, no USD). ` +
+        `El sistema espera el gasto en USD y lo multiplica por el tipo de cambio. ` +
+        `Exportá el reporte de Meta Ads en USD, o avisá para manejar ${monedaMatch[1].toUpperCase()} directo.`
     );
   }
 

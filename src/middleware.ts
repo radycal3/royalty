@@ -65,7 +65,7 @@ export async function middleware(request: NextRequest) {
   const adminRoutes = [
     '/dashboard', '/importar', '/productos', '/gastos',
     '/stock', '/equipo', '/usuarios', '/cadetes', '/laboratorio', '/configuracion',
-    '/clientes'
+    '/clientes', '/consumo-interno', '/auditoria', '/evolucion'
   ]
   if (adminRoutes.some(r => path.startsWith(r)) && usuario.rol !== 'admin') {
     return NextResponse.redirect(new URL('/panel', request.url))

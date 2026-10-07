@@ -62,6 +62,21 @@ function formatFechaLocal(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+// "Hoy" en hora de Argentina. CRÍTICO: estas funciones corren server-side
+// ('use server'); el servidor de Vercel está en UTC, así que `new Date()` con
+// getDay()/getDate() daría el día UTC. Entre ~21:00 y 00:00 ART el server ya
+// cree que es el día siguiente → calcularía mal el período "actual" (ej. un
+// jueves de noche lo tomaría como viernes). Se arma la fecha ARG explícita.
+function hoyArgentina(): Date {
+  const s = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'America/Argentina/Buenos_Aires',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date()); // "YYYY-MM-DD" en ARG
+  return new Date(s + 'T12:00:00'); // mediodía: evita bordes de huso
+}
+
 const MESES = [
   'Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun',
   'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic',
@@ -72,7 +87,7 @@ function buildPeriodoInfo(viernesStr: string): PeriodoInfo {
   const domingo = new Date(viernes);
   domingo.setDate(viernes.getDate() + 2);
 
-  const hoy = new Date();
+  const hoy = hoyArgentina();
   const periodoHoy = periodoDeJS(hoy);
   const esActual = formatFechaLocal(periodoHoy) === viernesStr;
 
@@ -98,7 +113,7 @@ function buildPeriodoInfo(viernesStr: string): PeriodoInfo {
 // ─── Obtener período actual ────────────────────────────────────────────────
 
 export async function obtenerPeriodoActual(): Promise<PeriodoInfo> {
-  const hoy = new Date();
+  const hoy = hoyArgentina();
   const viernes = periodoDeJS(hoy);
   return buildPeriodoInfo(formatFechaLocal(viernes));
 }

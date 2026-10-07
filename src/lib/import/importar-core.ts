@@ -93,7 +93,10 @@ export async function importarPedidosCore(
 
   const factorPorIngrediente = new Map<string, number>();
   for (const ing of ingredientesData) {
-    factorPorIngrediente.set(ing.id, ing.factor_conversion ?? 1);
+    // Guard contra factor_conversion = 0 (error de carga): dividir por 0 daría
+    // un costo Infinity congelado. Un 0 pasaba el `?? 1` sin filtrarse.
+    const f = ing.factor_conversion;
+    factorPorIngrediente.set(ing.id, f && f > 0 ? f : 1);
   }
 
   const recetasPorProducto = new Map<

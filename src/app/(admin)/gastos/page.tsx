@@ -50,9 +50,12 @@ import { parseMetaAdsCsv, type MetaAdsParseResult } from '@/lib/utils/meta-ads-p
 
 // ─── Constantes ────────────────────────────────────────────────────────────
 
+// NOTA: 'cadeteria' se quitó del selector a propósito. El costo de cadetería
+// se maneja por las jornadas de cadetes (resultadoDelivery), no como gasto
+// manual — cargarlo acá lo contaría dos veces. El tipo 'cadeteria' sigue
+// existiendo en Categoria solo para datos legacy; no debe ofrecerse para carga.
 const CATEGORIAS: { value: Categoria; label: string; tipoDefault: TipoGasto }[] = [
   { value: 'publicidad', label: 'Publicidad', tipoDefault: 'variable' },
-  { value: 'cadeteria', label: 'Cadetería', tipoDefault: 'variable' },
   { value: 'packaging', label: 'Packaging', tipoDefault: 'variable' },
   { value: 'sueldos', label: 'Sueldos', tipoDefault: 'fijo' },
   { value: 'servicios', label: 'Servicios', tipoDefault: 'fijo' },

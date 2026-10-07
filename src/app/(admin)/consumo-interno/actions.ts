@@ -62,6 +62,21 @@ function formatFechaLocal(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+// Verifica rol admin. Defensa en profundidad: este módulo maneja costos en
+// pesos y usa createAdminClient() (que bypasea RLS), así que el rol del caller
+// debe verificarse en el server action, no solo confiar en el gate de ruta.
+async function exigirAdmin() {
+  const supabase = await createClient();
+  const { data: auth } = await supabase.auth.getUser();
+  if (!auth.user) throw new Error('No autenticado');
+  const { data: yo } = await supabase
+    .from('usuarios')
+    .select('rol')
+    .eq('id', auth.user.id)
+    .single();
+  if (yo?.rol !== 'admin') throw new Error('No autorizado');
+}
+
 // ─── Obtener productos para el selector ────────────────────────────────────
 
 export async function obtenerProductosParaConsumo(): Promise<ProductoParaConsumo[]> {
@@ -97,10 +112,8 @@ export async function obtenerProductosParaConsumo(): Promise<ProductoParaConsumo
 export async function obtenerConsumosPeriodo(
   viernesPeriodo: string
 ): Promise<ConsumoResumen> {
+  await exigirAdmin();
   const supabase = await createClient();
-
-  const { data: user } = await supabase.auth.getUser();
-  if (!user.user) throw new Error('No autenticado');
 
   const viernes = new Date(viernesPeriodo + 'T12:00:00');
   const domingo = new Date(viernes);
@@ -170,10 +183,7 @@ export async function registrarConsumo(input: {
   nota: string | null;
   lineas: ConsumoLinea[];
 }): Promise<{ consumo_id: string; costo_total: number }> {
-  const supabase = await createClient();
-
-  const { data: authUser } = await supabase.auth.getUser();
-  if (!authUser.user) throw new Error('No autenticado');
+  await exigirAdmin();
 
   if (input.lineas.length === 0) {
     throw new Error('Agregá al menos un producto');
@@ -212,7 +222,10 @@ export async function registrarConsumo(input: {
 
   const factorPorIngrediente = new Map<string, number>();
   for (const ing of ingredientesData) {
-    factorPorIngrediente.set(ing.id, ing.factor_conversion ?? 1);
+    // Guard contra factor_conversion = 0 (error de carga) → evita dividir por
+    // cero y guardar un costo Infinity. Un 0 pasaba el `?? 1` sin filtrarse.
+    const f = ing.factor_conversion;
+    factorPorIngrediente.set(ing.id, f && f > 0 ? f : 1);
   }
 
   // ── Crear cabecera ──
@@ -332,10 +345,8 @@ export async function registrarConsumo(input: {
 // ─── Eliminar consumo ──────────────────────────────────────────────────────
 
 export async function eliminarConsumo(id: string) {
+  await exigirAdmin();
   const supabase = await createClient();
-
-  const { data: user } = await supabase.auth.getUser();
-  if (!user.user) throw new Error('No autenticado');
 
   const { error } = await supabase
     .from('consumo_interno')

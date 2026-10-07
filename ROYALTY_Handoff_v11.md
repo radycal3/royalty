@@ -1,7 +1,41 @@
-# ROYALTY — Handoff Técnico Completo v10
-## Fecha: 4 de agosto de 2026
+# ROYALTY — Handoff Técnico Completo v11
+## Fecha: 7 de octubre de 2026
 
-Sos el nuevo Claude (o Claude Code) que continúa el desarrollo de ROYALTY, el sistema de gestión de Royalty Burgers (Rosario, Argentina). Este documento es la fuente de verdad del proyecto y **reemplaza a ROYALTY_Handoff_v9.md** (eliminado). No tenés acceso al chat anterior — toda la información que necesitás está acá.
+Sos el nuevo Claude (o Claude Code) que continúa el desarrollo de ROYALTY, el sistema de gestión de Royalty Burgers (Rosario, Argentina). Este documento es la fuente de verdad del proyecto y **reemplaza a ROYALTY_Handoff_v10.md** (renombrado). No tenés acceso al chat anterior — toda la información que necesitás está acá.
+
+---
+
+## 0. CAMBIOS SESIÓN 6–7 OCT 2026 (LEER PRIMERO)
+
+**Fix mayor de confiabilidad de ventas: captura de "extras con precio" de Pedix.**
+
+Lucas notó que el número de ventas del dashboard no le cuadraba. Causa raíz (probada contra 1723 pedidos reales): **Pedix guarda los modificadores CON precio** (Nuggets x6/x10, Lata de Coca-Cola, Salsa Royalty, Carne con cheddar extra, Bacon extra, Papas fritas) **dentro de la columna "Detalles" de cada línea** de la hoja "Detalle de productos", NO como filas propias. El parser solo leía `Producto` + `Total` e **ignoraba "Detalles"**, así que esos extras se perdían de las ventas. Impacto: ~2,2% histórico (hasta 6% en algunas semanas; $71.500 solo en la semana Vie 2–4 oct). La venta neta real de un pedido = `Total − Cargos Envío`, y reconcilia 100% sumando líneas principales + extras.
+
+Qué se cambió (deployado a `main`, commit `869dd20`):
+- **`src/lib/utils/pedix-parser.ts`**: `parseAddons()` extrae los extras con precio de "Detalles"/"Observaciones" y los emite como líneas adicionales (`cantidad = Nx`, `precioUnitario = total/cantidad`; el `$X` de Pedix es el total de la línea, verificado). Los de precio $0 (Ketchup/Mayonesa gratis) se ignoran.
+- **`findColumn()` ahora matchea EXACTO antes que por substring** — arregla un bug latente donde el candidato `'total'` tomaba la columna "Subtotal" (`"subtotal".includes("total")`). Afectaba el "Venta estimada" del preview, no las ventas guardadas.
+- **Auto-auditoría por pedido en el parser**: si `Σ líneas ≠ Total − Envío`, agrega una advertencia a `errores` (se ve en el preview) en vez de dejar pasar venta mal contada. Con los datos reales da 0 advertencias; saltaría si Pedix introduce algo nuevo no modelado (ej. recargo por medio de pago).
+- **`src/lib/import/importar-core.ts` (NUEVO)**: núcleo de importación extraído, **compartido** por el server action (`importar/actions.ts`) y por el backfill de histórico — una sola fuente de verdad para la inserción/congelación de costos. Además reporta `venta_no_mapeada` (venta de líneas sin mapear) en vez de descartarla en silencio. `importar/actions.ts` quedó slim: auth + rol + hash → delega en `importarPedidosCore`.
+- **`PreviewStep.tsx`**: "Venta estimada" ahora suma totales de línea (= ventas reales del dashboard), no `p.total` (que incluía envío).
+
+**Productos/mapeo creados** (vía backfill): 3 productos nuevos categoría `acompanamiento` con receta — **Carne con cheddar extra** (Carne x1 + Cheddar x2, ~$1.505), **Bacon extra** (Panceta x1, ~$500), **Salsa Royalty** (Mayonesa x1 + Ketchup x1, ~$150) — y 6 alias en `mapeo_pedix`: "Lata de Coca-Cola"→Lata de coca 350ml, "Nuggets x6"→Nuggets x6, "Nuggets x10"→Nuggets x10, y los 3 nuevos.
+
+**Backfill del histórico (hecho, verificado):** Lucas eligió re-import COMPLETO (no "solo agregar extras"). Se re-importaron los 17 archivos activos (de `Lista de pedidos (N).xlsx` en ~/Downloads) con el parser corregido y se **reabrieron+recerraron las 17 semanas**. Resultado: Σ ventas cerradas **$26,46M → $26,93M**; beneficio neto total **−$135.472 → +$102.077** (Jul 17-19 y Jul 24-26 pasaron de pérdida a ganancia). Las 17 semanas reconcilian al peso con el Excel (snapshot.ventas == Σ(Total−Envío)). Hay backup JSON del estado previo (ver scratchpad de la sesión).
+- Nota: el re-import completo recomputa los costos históricos con la tabla `ingredientes_costos` ACTUAL resuelta por fecha (no con la que había al importar originalmente), lo que movió ~1-2% el costo de 7 semanas viejas. Se verificó que resuelve a costos SANOS (Carne $12.500/kg). La alternativa "solo agregar extras" (preservar costos congelados, solo insertar las líneas de extra) se ofreció y Lucas prefirió el re-import completo.
+
+**⚠️ DEUDA/HALLAZGO ABIERTO — filas basura en `ingredientes_costos`:** la tabla tiene costos claramente erróneos: Carne con ~13 filas de vigencia 2026-06-01 ($50.000, $1.137, $23.000, varios $12.500…), Caja Royalty ($300 vs $300.000), Queso Danbo ($400 vs $3.200). Hoy la resolución (`fecha_vigencia DESC, created_at DESC`) elige valores sanos por el desempate de timestamp, pero es frágil — una fila basura mal ubicada podría corromper márgenes. Limpiarlas choca con el principio append-only → decisión pendiente con Lucas. No tocar sin consultar.
+
+**Relevamiento amplio + correcciones (misma sesión):** se auditó toda la app y se aplicaron fixes de 3 tipos (deployados a `main`, salvo la migración que requiere acción manual):
+
+🔴 **Seguridad — fuga de pesos a empleados por RLS.** El principio 2.10 se cumplía en la UI/server-actions pero NO en la capa RLS: varias tablas con pesos tenían SELECT para empleado/`USING(true)`, y la RPC `obtener_salud_clientes` era `SECURITY DEFINER` + GRANT a todos los autenticados. Un empleado (hay 1 real) podía leerlos directo por la API REST. Fixes:
+  - **`supabase/migrations/039_rls_fuga_pesos_empleado.sql` (NUEVO) — ⚠️ PENDIENTE DE APLICAR en el SQL editor de Supabase.** Pone admin-only el SELECT de `pedidos`, `pedidos_lineas`, `periodos_productos`, `periodos_gastos`, `cadetes_jornadas`, `clientes`, y revoca la RPC de salud a empleados (la deja para `service_role`). Hasta aplicarla, la fuga a nivel API sigue abierta aunque el código ya esté deployado.
+  - Código (ya deployado): `exigirAdmin()`/chequeo de rol en `registrarConsumo`/`obtenerConsumosPeriodo`/`eliminarConsumo` (consumo-interno), `obtenerSaludClientes` (dashboard — ahora llama la RPC con admin client), `cerrarPeriodo` (evolucion), `generarInformeMensual` (informe). Middleware: se agregaron `/consumo-interno`, `/auditoria`, `/evolucion` a `adminRoutes`.
+
+🟠 **Correctness:** parser de Meta Ads con match EXACTO primero (evita enganchar columnas derivadas tipo "Coste por resultados") + **guard de moneda** (si la columna de gasto no es USD, ej. "(ARS)", tira error en vez de multiplicar por el tipo de cambio y cargar ~1000× de más). Categoría "Cadetería" sacada del selector de gastos y excluida de `calcularKpis` (evita doble conteo con `resultadoDelivery`). Guard `factor_conversion > 0` en `importar-core` y consumo (evita costo Infinity). Fechas server-side de `gastos/actions.ts` (`obtenerPeriodoActual`/`buildPeriodoInfo`) e `generarInformeMensual` ahora usan hora Argentina (`Intl`), no UTC.
+
+⚡ **Eficiencia:** `construirContextoSemana` corre sus 6 lecturas en paralelo (antes en serie) y acepta `saludPrecomputada`; el Informe mensual calcula la salud UNA vez y la reusa en todas las semanas (antes repetía la RPC más cara por semana).
+
+**Hallazgos de DISEÑO que quedaron SIN tocar (necesitan tu criterio antes):** (a) el "Mes" del dashboard usa mes calendario mientras el Informe usa semanas operativas → dan "ventas del mes" distintas en los bordes; (b) los deltas de Mes/Trim/Año comparan períodos con distinta cantidad de findes (4 vs 5); (c) "% facturación repetidores" define repetidor contra el inicio del rango → subestima en rangos largos (Mes/Año); (d) gastos fechados Lun-Jue no aparecen en la vista/cierre semanal (Vie-Dom) pero sí en el mensual → las semanas no suman el mes (ver también sección 19.17); (e) merma: la ventana de compras desde el lunes puede doble-contar compras ya presentes en el conteo del viernes (solo afecta cuando se carguen conteos de stock). Más menores: salud usa `CURRENT_DATE` (UTC) en la función SQL; el bloque "financiero" del contexto para IA no marca `sin_datos_todavia`; `importarMetaAds` no es atómico.
 
 ---
 
