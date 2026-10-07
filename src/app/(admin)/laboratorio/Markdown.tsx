@@ -21,6 +21,10 @@ function inline(text: string, keyBase: string): React.ReactNode[] {
   return out;
 }
 
+const esFilaTabla = (l: string) => /^\s*\|.*\|\s*$/.test(l);
+const esSeparadorTabla = (l: string) => /^\s*\|?[\s:|-]*-[\s:|-]*\|?\s*$/.test(l) && l.includes('-');
+const celdas = (l: string) => l.trim().replace(/^\||\|$/g, '').split('|').map((c) => c.trim());
+
 export default function Markdown({ texto }: { texto: string }) {
   const lineas = (texto || '').split('\n');
   const bloques: React.ReactNode[] = [];
@@ -40,9 +44,39 @@ export default function Markdown({ texto }: { texto: string }) {
     lista = null;
   };
 
-  for (const raw of lineas) {
+  for (let i = 0; i < lineas.length; i++) {
+    const raw = lineas[i];
     const l = raw.trimEnd();
     if (l.trim() === '') { flushLista(); continue; }
+
+    // Tabla: fila header + separador (|---|---|) + filas de datos
+    if (esFilaTabla(l) && i + 1 < lineas.length && esSeparadorTabla(lineas[i + 1])) {
+      flushLista();
+      const header = celdas(l);
+      const filas: string[][] = [];
+      let j = i + 2;
+      while (j < lineas.length && esFilaTabla(lineas[j]) && !esSeparadorTabla(lineas[j])) {
+        filas.push(celdas(lineas[j]));
+        j++;
+      }
+      bloques.push(
+        <div key={`tbl-${k++}`} className="overflow-x-auto">
+          <table className="my-1 w-full border-collapse text-xs">
+            <thead>
+              <tr>{header.map((c, ci) => <th key={ci} className="border border-border bg-surface-alt px-2 py-1 text-left font-medium text-text-secondary">{inline(c, `th-${k}-${ci}`)}</th>)}</tr>
+            </thead>
+            <tbody>
+              {filas.map((f, fi) => (
+                <tr key={fi}>{f.map((c, ci) => <td key={ci} className="border border-border px-2 py-1 text-text-secondary">{inline(c, `td-${k}-${fi}-${ci}`)}</td>)}</tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
+      i = j - 1;
+      continue;
+    }
+
     const h = l.match(/^(#{1,4})\s+(.*)$/);
     if (h) {
       flushLista();
