@@ -50,6 +50,21 @@ Qué se cambió (deployado a `main`, commit `869dd20`):
 
 ---
 
+## 0.1 LABORATORIO → "TU ANALISTA" (NUEVO, sesión 7-oct) + CAMBIO DE DEPLOY
+
+**Feature nueva: el Laboratorio ahora tiene un analista de negocio con chat.** El tab "Decisiones" (el loop viejo de recomendaciones→decisión→resultado) se preservó intacto; se agregó el tab "Analista".
+- **Motor determinístico** `src/lib/analisis/` (`analisis-negocio.ts` + `tipos.ts`): `construirAnalisisCompleto(admin, scope, generadoEn)` arma TODO el análisis de un período (financiero, ranking de productos, por día Vie/Sáb/Dom, promos vs no-promo, afinidad repetidores vs nuevos, inversión con Meta Ads por conjunto, clientes, equipo, merma, tendencia). Soporta scope `semana` / `mes` / `comparacion`. La IA NUNCA inventa números: todo sale de acá. Es auto-contenido (recibe el client) → testeable aislado.
+- **Migración 040** (APLICADA): `laboratorio_conversaciones` (congela el `contexto` jsonb por conversación) + `laboratorio_mensajes`. Admin-only (`get_my_rol()='admin'`).
+- **Server/stream**: `laboratorio/analista-actions.ts` (iniciar/listar/obtener/archivar/eliminar conversación + `guardarComoDecision` que conecta con `decisiones_laboratorio`). Chat por **route handler** `laboratorio/chat/route.ts` (streaming de texto). Primer turno = INFORME con **Opus** (`claude-opus-4-8`); chat = **Sonnet** (`claude-sonnet-5`); el contexto va como bloque con `cache_control` (prompt caching) en `src/lib/laboratorio/prompts.ts`.
+- **UI**: `page.tsx` (tabs), `AnalistaTab.tsx` (selector de alcance + lista de conversaciones + datos duros + chat), `DecisionesTab.tsx` (el loop viejo movido acá), `Markdown.tsx` (renderer propio, soporta encabezados/negrita/listas/**tablas**).
+- Probado end-to-end en producción: informe de Opus + repreguntas de Sonnet, citando números del contexto y respetando la regla caliente/fría. Costo: con caching, cada repregunta sale centavos.
+
+**⚠️ CAMBIO CRÍTICO DE DEPLOY — el repo pasó a PÚBLICO.** Desde algún momento post-4-ago, Vercel (plan Hobby) empezó a **bloquear TODOS los deploys** del repo privado con "commit author did not have contributing access / Hobby no soporta colaboración en repos privados" (la cuenta radycal3 figura como colaborador, no dueño, del proyecto en Vercel). Ni el push ni el deploy por CLI lo esquivaban. **Solución aplicada:** se hizo **público** el repo `radycal3/royalty` (`gh repo edit --visibility public`) — Hobby despliega repos públicos sin esa restricción. Verificado que NO hay secretos en el repo (`.env*` en `.gitignore`; solo `.env.example` y placeholders). **Desde entonces los `git push` a main vuelven a auto-deployar normalmente.** Si en el futuro se quiere volver privado, hay que upgradear Vercel a Pro primero (si no, se re-bloquean los deploys). El git del repo quedó con `user.email = bsediciones@gmail.com` (como antes).
+
+**Menores pendientes del Analista:** el bloque "financiero" del contexto no marca `sin_datos` cuando una semana tiene 0 pedidos; las herramientas de drill-down (fase 3 "híbrida": comparar on-demand, detalle de día/producto) quedaron para después — hoy el chat es closed-book sobre el contexto congelado + "Guardar como decisión".
+
+---
+
 ## 1. CONTEXTO DEL PROYECTO
 
 **Negocio:** Royalty Burgers. Hamburguesería que opera viernes, sábado y domingo. El "período operativo" es Vie-Sáb-Dom.
