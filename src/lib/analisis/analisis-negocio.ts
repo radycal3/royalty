@@ -26,6 +26,26 @@ import type {
 
 const esPromo = (nombre: string) => /^\s*promo/i.test(nombre || '');
 
+// Áreas opcionales del análisis. El informe inicial las quiere TODAS (default).
+// Las herramientas de drill-down (ej. comparar_periodos) solo necesitan el
+// financiero + ranking de productos, así que apagan las áreas caras (sobre todo
+// el RPC de salud de clientes y Meta Ads) para no reventar el timeout de la
+// función. La matemática del P&L y productos es la misma en ambos casos → sin
+// divergencia con el motor real.
+export type OpcionesAnalisis = {
+  inversion?: boolean; // Meta Ads + gastos por categoría detallados (default true)
+  clientes?: boolean;  // RPC obtener_salud_clientes — el más caro (default true)
+  equipo?: boolean;    // métricas de equipo (default true)
+  merma?: boolean;     // conteos de stock (default true)
+  tendencia?: boolean; // últimas 8 semanas (default true)
+};
+
+const CLIENTES_VACIO: ClientesResumen = {
+  totalUnicos: 0, activos: 0, enRiesgo: 0, nuevoPerdido: 0, retencionCartera: 0,
+  tasaRetencion: 0, pctFacturacionRepetidores: 0, altoValorEnRiesgo: 0,
+  altoValorVentasHistoricas: 0, nuevosEnRiesgoEstaSemana: 0, medianaDiasEntreCompras: 0,
+};
+
 type PedidoRow = {
   fecha: string;
   cliente_id: string | null;
@@ -97,7 +117,8 @@ async function analizarPeriodo(
   productosMap: Map<string, { nombre: string; categoria: string }>,
   idsHamburguesa: Set<string>,
   primerPedido: Map<string, string>,
-  activas: Set<string>
+  activas: Set<string>,
+  opts: OpcionesAnalisis = {}
 ): Promise<AnalisisPeriodo> {
   const { desde, hasta } = rango;
   const pedidos = await cargarPedidos(admin, desde, hasta, activas);
@@ -219,16 +240,19 @@ async function analizarPeriodo(
 
   // Inversión (gastos por categoría + Meta Ads agregado del período)
   const porCategoria = aggGastos(gastosData || []);
-  const inversion = await construirInversion(admin, desde, hasta, ventas, porCategoria);
+  const inversion: Inversion = opts.inversion === false
+    ? { porCategoria, total: porCategoria.reduce((a, c) => a + c.total, 0), publicidad: 'sin_datos_todavia' }
+    : await construirInversion(admin, desde, hasta, ventas, porCategoria);
 
-  // Clientes (RPC, estado actual — se marca como tal afuera)
-  const clientes = await construirClientes(admin);
+  // Clientes (RPC, estado actual — se marca como tal afuera). Es la consulta más
+  // cara: las herramientas de drill-down la apagan (no usan este dato).
+  const clientes = opts.clientes === false ? CLIENTES_VACIO : await construirClientes(admin);
 
   // Equipo (métricas de las semanas del período)
-  const equipo = await construirEquipo(admin, desde, hasta, nPedidos);
+  const equipo = opts.equipo === false ? 'sin_datos_todavia' : await construirEquipo(admin, desde, hasta, nPedidos);
 
   // Merma (dormida si no hay conteos)
-  const merma = await construirMerma(admin, desde);
+  const merma = opts.merma === false ? 'sin_datos_todavia' : await construirMerma(admin, desde);
 
   return { rango, financiero, productos, porDia, promos, afinidad, inversion, clientes, equipo, merma };
 }
@@ -358,7 +382,8 @@ async function construirTendencia(admin: SupabaseClient, hastaRef: string, n: nu
 export async function construirAnalisisCompleto(
   admin: SupabaseClient,
   scope: ScopeAnalisis,
-  generadoEn: string
+  generadoEn: string,
+  opts: OpcionesAnalisis = {}
 ): Promise<AnalisisCompleto> {
   const activas = await activasSet(admin);
   const [{ data: prodRows }, { data: hamRows }, primerPedido] = await Promise.all([
@@ -369,15 +394,15 @@ export async function construirAnalisisCompleto(
   const productosMap = new Map<string, { nombre: string; categoria: string }>((prodRows || []).map((p: any) => [p.id, { nombre: p.nombre, categoria: p.categoria }]));
   const idsHamburguesa = new Set<string>((hamRows || []).map((p: any) => p.id));
 
-  const periodoA = await analizarPeriodo(admin, scope.a, productosMap, idsHamburguesa, primerPedido, activas);
+  const periodoA = await analizarPeriodo(admin, scope.a, productosMap, idsHamburguesa, primerPedido, activas, opts);
 
   // findes (viernes) en el período A
   const findes = contarViernes(scope.a.desde, scope.a.hasta);
 
-  const tendencia = await construirTendencia(admin, scope.a.hasta, 8);
+  const tendencia = opts.tendencia === false ? [] : await construirTendencia(admin, scope.a.hasta, 8);
 
   if (scope.tipo === 'comparacion') {
-    const periodoB = await analizarPeriodo(admin, scope.b, productosMap, idsHamburguesa, primerPedido, activas);
+    const periodoB = await analizarPeriodo(admin, scope.b, productosMap, idsHamburguesa, primerPedido, activas, opts);
     const deltas = construirDeltas(periodoA.financiero, periodoB.financiero);
     return { generadoEn, scopeTipo: 'comparacion', periodoA, periodoB, deltas, tendencia, findes };
   }

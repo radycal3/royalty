@@ -12,6 +12,23 @@ import { TOOLS, ejecutarTool } from '@/lib/laboratorio/tools';
 
 export const maxDuration = 120; // la generación del informe (Opus) puede tardar
 
+// La API de Anthropic exige alternancia estricta user/assistant. Si un turno se
+// cortó (timeout) sin guardar la respuesta, queda un mensaje 'user' huérfano en
+// el historial; sin esto, el SIGUIENTE mensaje armaría [user, user] y la API
+// tiraría error. Fusionamos turnos consecutivos del mismo rol (contenido texto).
+function normalizarAlternancia(msgs: Anthropic.MessageParam[]): Anthropic.MessageParam[] {
+  const out: Anthropic.MessageParam[] = [];
+  for (const m of msgs) {
+    const prev = out[out.length - 1];
+    if (prev && prev.role === m.role && typeof prev.content === 'string' && typeof m.content === 'string') {
+      prev.content = `${prev.content}\n\n${m.content}`;
+    } else {
+      out.push({ role: m.role, content: m.content });
+    }
+  }
+  return out;
+}
+
 // Streaming de texto plano. Primer turno (sin mensajes aún y sin `mensaje`) =
 // INFORME con Opus. Siguientes = chat con Sonnet. El contexto va como bloque
 // cacheable (prompt caching) → cada repregunta reusa el contexto barato.
@@ -69,9 +86,10 @@ export async function POST(req: Request) {
   // Mensajes para la API: siempre arrancan con la instrucción del informe (turno
   // user), luego el historial guardado, luego la nueva pregunta. Garantiza
   // alternancia válida user/assistant empezando por user.
-  const apiMessages: Anthropic.MessageParam[] = [{ role: 'user', content: INFORME_INSTRUCCION }];
-  for (const m of storedMsgs) apiMessages.push({ role: m.rol, content: m.contenido });
-  if (mensaje) apiMessages.push({ role: 'user', content: mensaje });
+  const apiMessagesRaw: Anthropic.MessageParam[] = [{ role: 'user', content: INFORME_INSTRUCCION }];
+  for (const m of storedMsgs) apiMessagesRaw.push({ role: m.rol, content: m.contenido });
+  if (mensaje) apiMessagesRaw.push({ role: 'user', content: mensaje });
+  const apiMessages = normalizarAlternancia(apiMessagesRaw);
 
   const model = esInforme ? MODELO_INFORME : MODELO_CHAT;
   const system: Anthropic.TextBlockParam[] = [
@@ -96,7 +114,7 @@ export async function POST(req: Request) {
           rondas++;
           const s = anthropic.messages.stream({
             model,
-            max_tokens: 4096,
+            max_tokens: esInforme ? 8192 : 4096,
             system,
             messages: convMessages,
             // Herramientas de drill-down solo en el chat (el informe es closed-book
@@ -129,15 +147,20 @@ export async function POST(req: Request) {
           }
           break;
         }
-        if (full.trim()) {
-          await admin.from('laboratorio_mensajes').insert({
-            conversacion_id: conversacionId, orden: assistantOrden, rol: 'assistant', contenido: full, meta: { modelo: model },
-          });
-        }
       } catch (e) {
         const msg = e instanceof Error ? e.message : 'Error desconocido';
         controller.enqueue(encoder.encode('\n\n⚠️ Error al generar la respuesta: ' + msg));
       } finally {
+        // Guardar SIEMPRE lo que se haya generado (aunque el turno se haya cortado
+        // a medias): así no se pierde la respuesta parcial y el mensaje 'user' no
+        // queda huérfano rompiendo el turno siguiente.
+        if (full.trim()) {
+          try {
+            await admin.from('laboratorio_mensajes').insert({
+              conversacion_id: conversacionId, orden: assistantOrden, rol: 'assistant', contenido: full, meta: { modelo: model },
+            });
+          } catch { /* best-effort: si falla el guardado, igual cerramos el stream */ }
+        }
         controller.close();
       }
     },

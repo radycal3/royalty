@@ -100,10 +100,14 @@ function compactFin(f: any) {
 async function compararPeriodos(admin: SupabaseClient, fechaA: string, fechaB: string) {
   const a = buildRangoSemana(new Date(fechaA + 'T12:00:00'));
   const b = buildRangoSemana(new Date(fechaB + 'T12:00:00'));
+  // Lite: la herramienta solo devuelve financiero + top productos + deltas, así
+  // que apagamos las áreas caras (salud de clientes RPC, Meta Ads, equipo, merma,
+  // tendencia) que NO se usan acá. Baja de ~20s a ~2s y evita el timeout.
   const an = await construirAnalisisCompleto(
     admin,
     { tipo: 'comparacion', a: { desde: a.desde, hasta: a.hasta, label: a.label }, b: { desde: b.desde, hasta: b.hasta, label: b.label } },
-    new Date().toISOString()
+    new Date().toISOString(),
+    { inversion: false, clientes: false, equipo: false, merma: false, tendencia: false }
   );
   const top = (p: any) => p.productos.slice(0, 5).map((x: any) => ({ nombre: x.nombre, venta: r0(x.venta), margen: r1(x.margen) }));
   return {

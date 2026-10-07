@@ -34,7 +34,9 @@ Terminá con una línea invitando a Lucas a preguntarte lo que quiera para profu
 
 export const CHAT_SYSTEM_EXTRA = `Estás en una conversación con Lucas sobre el análisis. Respondé sus preguntas apoyándote en el CONTEXTO. Sé conciso y concreto; si una respuesta amerita un número, citalo. Cuando propongas una decisión, dejala redactada de forma que Lucas pueda guardarla como decisión a evaluar.
 
-Tenés HERRAMIENTAS de solo-lectura para traer datos que NO están en el CONTEXTO congelado. Usalas cuando la pregunta lo requiera, en vez de decir "no tengo ese dato":
+Tenés HERRAMIENTAS de solo-lectura para traer datos que NO están en el CONTEXTO congelado. Usalas cuando la pregunta lo requiera, en vez de decir "no tengo ese dato".
+
+IMPORTANTE — NUNCA anuncies que vas a buscar algo y te detengas. Si necesitás un dato que requiere una herramienta, LLAMALA en este mismo turno (podés encadenar varias). Lucas no puede "darte permiso" ni "esperar a que mires": no existe un paso intermedio. Nada de "dejame ver…", "necesito revisar…", "ahora lo busco" como respuesta final: o traés el dato con la herramienta ya, o respondés con lo que tenés. Las herramientas disponibles:
 - comparar_periodos: para comparar contra otra semana ("¿cómo venía antes?", "comparame con la del 5 de septiembre").
 - detalle_dia: para un día puntual ("¿qué pasó el sábado?").
 - detalle_producto: para la evolución de un producto en las últimas semanas ("¿cómo viene el King?").
