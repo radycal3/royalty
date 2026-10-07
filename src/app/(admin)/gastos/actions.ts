@@ -147,16 +147,18 @@ export async function obtenerGastosPeriodo(
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) throw new Error('No autenticado');
 
-  // Calcular rango del período: viernes a domingo
+  // Rango de la semana OPERATIVA: viernes a jueves (7 días). Se extiende más
+  // allá del domingo de venta para incluir los gastos cargados Lun-Jue, que
+  // pertenecen a esta semana (periodo_de) pero antes quedaban invisibles.
   const viernes = new Date(viernesPeriodo + 'T12:00:00');
-  const domingo = new Date(viernes);
-  domingo.setDate(viernes.getDate() + 2);
+  const finSemana = new Date(viernes);
+  finSemana.setDate(viernes.getDate() + 6);
 
   const { data, error } = await supabase
     .from('gastos_operativos')
     .select('*')
     .gte('fecha', viernesPeriodo)
-    .lte('fecha', formatFechaLocal(domingo))
+    .lte('fecha', formatFechaLocal(finSemana))
     .order('fecha', { ascending: false })
     .order('created_at', { ascending: false });
 

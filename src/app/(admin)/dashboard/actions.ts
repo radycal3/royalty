@@ -88,6 +88,7 @@ export async function calcularKpis(
     .from('pedidos')
     .select(`
       id,
+      fecha,
       importacion_id,
       envio_cobrado,
       cliente_id,
@@ -108,21 +109,26 @@ export async function calcularKpis(
 
   const activas = new Set((importaciones || []).map((i: any) => i.id));
 
-  // Clientes que ya tenían al menos 1 pedido ANTES del inicio del rango —
-  // son los "repetidores conocidos" para este período.
+  // "Repetidor" = cliente cuya PRIMERA compra (en importaciones activas) es
+  // ANTERIOR al pedido que estamos contando. Antes se definía contra el inicio
+  // del rango, lo que subestimaba la recompra en rangos largos (Mes/Año): un
+  // cliente que debutaba y volvía 10 veces dentro del año figuraba como "nuevo"
+  // todo el año. Con la fecha del primer pedido por cliente, la definición es
+  // independiente del rango y correcta en cualquier vista.
   // Se excluyen clientes sin ID (pedidos sin celular identificado).
-  const { data: clientesPrevios } = await supabase
+  const { data: todosPedidosCliente } = await supabase
     .from('pedidos')
-    .select('cliente_id, importacion_id')
-    .not('cliente_id', 'is', null)
-    .lt('fecha', desde);
+    .select('cliente_id, fecha, importacion_id')
+    .not('cliente_id', 'is', null);
 
-  // Solo clientes con pedidos previos en importaciones activas
-  const clientesConHistorial = new Set(
-    (clientesPrevios || [])
-      .filter((p: any) => activas.has(p.importacion_id))
-      .map((p: any) => p.cliente_id)
-  );
+  const primerPedidoCliente = new Map<string, string>();
+  for (const p of todosPedidosCliente || []) {
+    if (!activas.has(p.importacion_id)) continue;
+    const prev = primerPedidoCliente.get(p.cliente_id);
+    if (prev === undefined || p.fecha < prev) {
+      primerPedidoCliente.set(p.cliente_id, p.fecha);
+    }
+  }
 
   // Productos categoría 'hamburguesa' — para distinguir "hamburguesas
   // vendidas" de "unidades de cualquier producto" (bebidas, papas, etc.
@@ -151,7 +157,9 @@ export async function calcularKpis(
     // por pedido, NO dentro del loop de pedidos_lineas (que lo duplicaría
     // por cada línea, ver riesgo documentado en el handoff).
     enviosCobrados += p.envio_cobrado || 0;
-    const esRepetidor = p.cliente_id && clientesConHistorial.has(p.cliente_id);
+    // Repetidor: su primer pedido histórico es de un día anterior a este.
+    const primera = p.cliente_id ? primerPedidoCliente.get(p.cliente_id) : undefined;
+    const esRepetidor = !!(primera && primera < p.fecha);
     if (esRepetidor) pedidosRepetidores++;
     let ventasPedido = 0;
     for (const l of p.pedidos_lineas || []) {

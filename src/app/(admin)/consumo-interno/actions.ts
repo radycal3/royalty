@@ -115,9 +115,11 @@ export async function obtenerConsumosPeriodo(
   await exigirAdmin();
   const supabase = await createClient();
 
+  // Semana operativa completa (viernes a jueves, 7 días) para incluir consumo
+  // cargado Lun-Jue, coherente con el dashboard y con obtenerGastosPeriodo.
   const viernes = new Date(viernesPeriodo + 'T12:00:00');
-  const domingo = new Date(viernes);
-  domingo.setDate(viernes.getDate() + 2);
+  const finSemana = new Date(viernes);
+  finSemana.setDate(viernes.getDate() + 6);
 
   const { data: consumos, error } = await supabase
     .from('consumo_interno')
@@ -129,7 +131,7 @@ export async function obtenerConsumosPeriodo(
       )
     `)
     .gte('fecha', viernesPeriodo)
-    .lte('fecha', formatFechaLocal(domingo))
+    .lte('fecha', formatFechaLocal(finSemana))
     .order('fecha', { ascending: false })
     .order('created_at', { ascending: false });
 

@@ -41,6 +41,33 @@ function ultimoDiaMes(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
 }
 
+// ─── Rango OPERATIVO ───────────────────────────────────────────────────────
+// Una "semana operativa" va de viernes a jueves (7 días): se vende Vie-Sáb-Dom
+// pero los COSTOS pueden caer cualquier día (ej. un sueldo pagado el lunes).
+// Para que ningún gasto se pierda y para que un mes sea exactamente la SUMA de
+// sus semanas, los rangos de mes/trimestre/año se arman como el span de las
+// semanas operativas cuyo VIERNES cae dentro del período calendario — el mismo
+// criterio que usa el Informe mensual (periodo_de / decomponerMesEnSemanas).
+function primerViernesEnRango(desde: Date): Date {
+  const d = new Date(desde);
+  const add = ((5 - d.getDay()) + 7) % 7; // getDay 5 = viernes
+  d.setDate(d.getDate() + add);
+  return d;
+}
+function ultimoViernesEnRango(hasta: Date): Date {
+  const d = new Date(hasta);
+  const sub = ((d.getDay() - 5) + 7) % 7;
+  d.setDate(d.getDate() - sub);
+  return d;
+}
+function rangoOperativo(calDesde: Date, calHasta: Date): { desde: string; hasta: string } {
+  const primerVie = primerViernesEnRango(calDesde);
+  const ultimoVie = ultimoViernesEnRango(calHasta);
+  const finJueves = new Date(ultimoVie);
+  finJueves.setDate(ultimoVie.getDate() + 6); // jueves de la última semana
+  return { desde: fmt(primerVie), hasta: fmt(finJueves) };
+}
+
 const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
 const MESES_FULL = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
 
@@ -50,7 +77,9 @@ export function buildRangoSemana(referencia?: Date): Rango {
   const ref = referencia || new Date();
   const viernes = periodoDeJS(ref);
   const domingo = new Date(viernes);
-  domingo.setDate(viernes.getDate() + 2);
+  domingo.setDate(viernes.getDate() + 2);  // solo para el label (días de venta)
+  const jueves = new Date(viernes);
+  jueves.setDate(viernes.getDate() + 6);   // fin de la semana operativa (7 días)
 
   const hoy = new Date();
   const viernesHoy = periodoDeJS(hoy);
@@ -67,7 +96,11 @@ export function buildRangoSemana(referencia?: Date): Rango {
 
   return {
     desde: fmt(viernes),
-    hasta: fmt(domingo),
+    // hasta = jueves (no domingo): captura los gastos de Lun-Jue que pertenecen
+    // a esta semana operativa. Las ventas solo ocurren Vie-Dom, así que esto NO
+    // cambia ventas/pedidos; solo suma los costos de media semana que antes se
+    // perdían. El label y el botón "Cerrar semana" siguen basados en el domingo.
+    hasta: fmt(jueves),
     tipo: 'semana',
     label,
     esActual: fmt(viernes) === fmt(viernesHoy),
@@ -76,12 +109,16 @@ export function buildRangoSemana(referencia?: Date): Rango {
 
 export function buildRangoMes(year: number, month: number): Rango {
   const hoy = new Date();
-  const desde = new Date(year, month, 1);
-  const hasta = new Date(year, month, ultimoDiaMes(year, month));
+  // Operativo: semanas cuyo viernes cae en el mes calendario. Así el mes es la
+  // suma exacta de sus semanas y coincide con el "Informe para IA".
+  const { desde, hasta } = rangoOperativo(
+    new Date(year, month, 1),
+    new Date(year, month, ultimoDiaMes(year, month))
+  );
 
   return {
-    desde: fmt(desde),
-    hasta: fmt(hasta),
+    desde,
+    hasta,
     tipo: 'mes',
     label: `${MESES_FULL[month]} ${year}`,
     esActual: hoy.getFullYear() === year && hoy.getMonth() === month,
@@ -92,14 +129,16 @@ export function buildRangoTrimestre(year: number, quarter: number): Rango {
   const hoy = new Date();
   const mesInicio = quarter * 3;
   const mesFin = mesInicio + 2;
-  const desde = new Date(year, mesInicio, 1);
-  const hasta = new Date(year, mesFin, ultimoDiaMes(year, mesFin));
+  const { desde, hasta } = rangoOperativo(
+    new Date(year, mesInicio, 1),
+    new Date(year, mesFin, ultimoDiaMes(year, mesFin))
+  );
 
   const qActual = Math.floor(hoy.getMonth() / 3);
 
   return {
-    desde: fmt(desde),
-    hasta: fmt(hasta),
+    desde,
+    hasta,
     tipo: 'trimestre',
     label: `Q${quarter + 1} ${year}`,
     esActual: hoy.getFullYear() === year && qActual === quarter,
@@ -108,9 +147,13 @@ export function buildRangoTrimestre(year: number, quarter: number): Rango {
 
 export function buildRangoAño(year: number): Rango {
   const hoy = new Date();
+  const { desde, hasta } = rangoOperativo(
+    new Date(year, 0, 1),
+    new Date(year, 11, 31)
+  );
   return {
-    desde: `${year}-01-01`,
-    hasta: `${year}-12-31`,
+    desde,
+    hasta,
     tipo: 'año',
     label: `${year}`,
     esActual: hoy.getFullYear() === year,

@@ -284,6 +284,11 @@ export async function obtenerAnalisisMerma(desde: string, hasta: string): Promis
   const { data: user } = await supabase.auth.getUser();
   if (!user.user) throw new Error('No autenticado');
 
+  // Semana física de venta: viernes (desde) → domingo. Se calcula acá y NO se
+  // usa `hasta` para los conteos, porque `hasta` ahora puede venir como el
+  // jueves de la semana operativa (7 días) — el conteo de fin de semana es del
+  // DOMINGO. Así la merma no se rompe por el cambio de ventana operativa.
+  const domingo = sumarDias(desde, 2);
   const lunes = sumarDias(desde, -4);
   const domingoAnterior = sumarDias(desde, -5);
 
@@ -302,9 +307,11 @@ export async function obtenerAnalisisMerma(desde: string, hasta: string): Promis
       .eq('activo', true)
       .order('nombre'),
     obtenerConsumoIngredientes(desde, hasta),
-    supabase.from('compras_ingredientes').select('ingrediente_id, cantidad, costo_total').gte('fecha', lunes).lte('fecha', hasta),
+    // Con fecha para separar compras de Lun-Jue (previas al conteo del viernes)
+    // de las de Vie-Dom (ver más abajo).
+    supabase.from('compras_ingredientes').select('ingrediente_id, cantidad, costo_total, fecha').gte('fecha', lunes).lte('fecha', domingo),
     supabase.from('conteos_stock').select('ingrediente_id, cantidad').eq('fecha', desde).eq('tipo', 'inicio_semana'),
-    supabase.from('conteos_stock').select('ingrediente_id, cantidad').eq('fecha', hasta).eq('tipo', 'fin_noche'),
+    supabase.from('conteos_stock').select('ingrediente_id, cantidad').eq('fecha', domingo).eq('tipo', 'fin_noche'),
     supabase.from('conteos_stock').select('ingrediente_id, cantidad').eq('fecha', domingoAnterior).eq('tipo', 'fin_noche'),
   ]);
 
@@ -314,12 +321,19 @@ export async function obtenerAnalisisMerma(desde: string, hasta: string): Promis
 
   const teoricoPorNombre = new Map(consumoTeorico.map((c) => [c.nombre, c]));
 
-  const comprasPorIng = new Map<string, { cantidad: number; costo: number }>();
+  // Dos buckets de compras: Lun-Jue (ANTES del conteo del viernes) y Vie-Dom.
+  // Si el stock de inicio es el conteo del viernes, las compras de Lun-Jue YA
+  // están reflejadas en ese conteo físico → sumarlas de nuevo doble-contaría e
+  // inflaría la merma. Si el inicio es el respaldo del domingo anterior, las de
+  // Lun-Jue sí son entradas nuevas y cuentan.
+  const comprasSemana = new Map<string, { cantidad: number; costo: number }>();   // Vie-Dom
+  const comprasPrevias = new Map<string, { cantidad: number; costo: number }>();  // Lun-Jue
   for (const c of comprasData || []) {
-    const e = comprasPorIng.get(c.ingrediente_id) || { cantidad: 0, costo: 0 };
+    const mapa = (c as any).fecha >= desde ? comprasSemana : comprasPrevias;
+    const e = mapa.get(c.ingrediente_id) || { cantidad: 0, costo: 0 };
     e.cantidad += c.cantidad;
     e.costo += c.costo_total;
-    comprasPorIng.set(c.ingrediente_id, e);
+    mapa.set(c.ingrediente_id, e);
   }
 
   const inicioPorIng = new Map((inicioData || []).map((c: any) => [c.ingrediente_id, c.cantidad]));
@@ -337,10 +351,6 @@ export async function obtenerAnalisisMerma(desde: string, hasta: string): Promis
 
     const consumoInternoRegistrado = consumoInternoPorIng.get(ing.id) ?? 0;
 
-    const compra = comprasPorIng.get(ing.id);
-    const comprasCantidad = compra?.cantidad ?? 0;
-    const comprasCosto = compra?.costo ?? 0;
-
     let stockInicio: number | null = null;
     let stockInicioFuente: 'inicio_semana' | 'fallback_semana_anterior' | null = null;
     if (inicioPorIng.has(ing.id)) {
@@ -350,6 +360,15 @@ export async function obtenerAnalisisMerma(desde: string, hasta: string): Promis
       stockInicio = fallbackPorIng.get(ing.id)!;
       stockInicioFuente = 'fallback_semana_anterior';
     }
+
+    // Compras a computar según la fuente del stock de inicio (evita doble conteo):
+    //  - inicio_semana (conteo del viernes): solo compras Vie-Dom.
+    //  - fallback (conteo del domingo anterior): todas desde el lunes.
+    const cSem = comprasSemana.get(ing.id) || { cantidad: 0, costo: 0 };
+    const cPre = comprasPrevias.get(ing.id) || { cantidad: 0, costo: 0 };
+    const incluirPrevias = stockInicioFuente === 'fallback_semana_anterior';
+    const comprasCantidad = cSem.cantidad + (incluirPrevias ? cPre.cantidad : 0);
+    const comprasCosto = cSem.costo + (incluirPrevias ? cPre.costo : 0);
 
     const stockFin = finPorIng.has(ing.id) ? finPorIng.get(ing.id)! : null;
     const datosCompletos = stockInicio !== null && stockFin !== null;

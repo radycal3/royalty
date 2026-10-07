@@ -76,6 +76,20 @@ type RankingTab = 'vendidos' | 'beneficio' | 'margen';
 
 // ─── Subcomponentes ──────────────────────────────────────────────────────
 
+// Cuenta los fines de semana operativos (viernes) dentro de un rango. Un mes
+// puede tener 4 o 5 — por eso comparar totales mensuales directamente puede
+// engañar (un mes con 5 findes "crece" vs uno de 4 sin vender más por finde).
+function contarFindes(desde: string, hasta: string): number {
+  let n = 0;
+  const d = new Date(desde + 'T12:00:00');
+  const end = new Date(hasta + 'T12:00:00');
+  while (d <= end) {
+    if (d.getDay() === 5) n++;
+    d.setDate(d.getDate() + 1);
+  }
+  return n;
+}
+
 function Delta({
   actual,
   anterior,
@@ -2261,7 +2275,16 @@ export default function DashboardPage() {
   // ── Flujo de cierre de período ──────────────────────────────────────
 
   const hoyLocalStr = (() => { const h = new Date(); return `${h.getFullYear()}-${String(h.getMonth() + 1).padStart(2, '0')}-${String(h.getDate()).padStart(2, '0')}`; })();
-  const semanaTerminada = tipoSeleccionado === 'semana' && (!rango.esActual || rango.hasta < hoyLocalStr);
+  // El rango de la semana ahora termina el JUEVES (semana operativa de 7 días,
+  // para capturar gastos de Lun-Jue). Pero "Cerrar semana" debe seguir
+  // disponible desde el lunes, apenas termina la venta (Vie-Dom). Por eso el
+  // corte se calcula sobre el DOMINGO de venta (desde + 2), no sobre rango.hasta.
+  const domingoVenta = (() => {
+    const d = new Date(rango.desde + 'T12:00:00');
+    d.setDate(d.getDate() + 2);
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  })();
+  const semanaTerminada = tipoSeleccionado === 'semana' && (!rango.esActual || domingoVenta < hoyLocalStr);
 
   async function abrirModalCierre() {
     if (!kpis) return;
@@ -2521,6 +2544,21 @@ export default function DashboardPage() {
               </button>
             ))}
         </div>
+
+        {kpis && (rango.tipo === 'mes' || rango.tipo === 'trimestre' || rango.tipo === 'año') && (() => {
+          const nAct = contarFindes(rango.desde, rango.hasta);
+          const nAnt = kpis.rangoAnterior ? contarFindes(kpis.rangoAnterior.desde, kpis.rangoAnterior.hasta) : null;
+          return (
+            <div data-print="hidden" className="mt-1 text-center text-xs text-text-muted">
+              {nAct} {nAct === 1 ? 'fin de semana operativo' : 'fines de semana operativos'}
+              {nAnt !== null && nAnt !== nAct && (
+                <span className="text-warning">
+                  {' · '}el período anterior tuvo {nAnt} — comparar totales no es directo
+                </span>
+              )}
+            </div>
+          );
+        })()}
       </div>
 
       {error && (
