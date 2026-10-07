@@ -44,8 +44,13 @@ export default function PreviewStep({
     const fechas = new Set(parseResult.pedidos.map((p) => p.fecha));
     const fechasOrdenadas = Array.from(fechas).sort();
 
+    // Suma de los totales de línea (productos + extras). Coincide exactamente
+    // con lo que el dashboard contará como "ventas" (neto de producto, sin
+    // envío), que es lo que importa validar acá. NO se usa p.total porque ese
+    // incluye el envío cobrado — que el sistema maneja aparte en Delivery.
     const ventaEstimada = parseResult.pedidos.reduce(
-      (sum, p) => sum + (p.total || 0), 0
+      (sum, p) => sum + p.lineas.reduce((s, l) => s + l.total, 0),
+      0
     );
 
     const productosEnArchivo = new Set<string>();

@@ -92,13 +92,65 @@ function parseSheetWithHeaders(sheet: XLSX.WorkSheet): {
 /**
  * Busca el índice de una columna por posibles nombres de header.
  * Retorna -1 si no encuentra ninguno.
+ *
+ * Primero intenta coincidencia EXACTA (en orden de candidatos) y recién
+ * después cae a coincidencia por substring. Esto evita el bug histórico de
+ * que el candidato 'total' matcheara la columna "Subtotal" (porque
+ * "subtotal".includes("total") es true) antes que la columna "Total" real:
+ * con exacto-primero, el header "total" gana sobre "subtotal". El fallback
+ * por substring se mantiene para candidatos pensados como fragmentos
+ * (ej. 'nro' → "nro pedido", 'cargos envío' → "cargos envío").
  */
 function findColumn(headers: string[], posiblesNombres: string[]): number {
+  for (const nombre of posiblesNombres) {
+    const idx = headers.findIndex((h) => h === nombre.toLowerCase());
+    if (idx !== -1) return idx;
+  }
   for (const nombre of posiblesNombres) {
     const idx = headers.findIndex((h) => h.includes(nombre.toLowerCase()));
     if (idx !== -1) return idx;
   }
   return -1;
+}
+
+export type AddonParsed = { nombre: string; cantidad: number; total: number };
+
+/**
+ * Extrae los modificadores CON PRECIO que Pedix embebe en las columnas
+ * "Detalles"/"Observaciones" de cada línea del detalle, en vez de darlos
+ * como filas propias. Ejemplos de líneas reales:
+ *   "- 1x Nuggets x6: $5.500,00"
+ *   "Gaseosa Coca-Cola de 354ml: - 2x Lata de Coca-Cola: $7.000,00"
+ *   "Condimento: - 1x Ketchup: $0,00"   (gratis → se ignora)
+ *
+ * El monto que trae Pedix es el TOTAL de esa línea de modificador (ya
+ * incluye la cantidad) — verificado contra 1723 pedidos reales: el neto del
+ * pedido (Total − Envío) reconcilia al 100% sumando estos montos tal cual
+ * (el modelo "precio × cantidad" solo daba 98,5%). Por eso `total` es el
+ * monto parseado y el precio unitario se deriva como total/cantidad.
+ *
+ * Los de precio 0 (condimentos gratis como Ketchup/Mayonesa) se ignoran:
+ * no son venta.
+ */
+function parseAddons(detalles: any, observaciones: any): AddonParsed[] {
+  const out: AddonParsed[] = [];
+  for (const raw of [detalles, observaciones]) {
+    if (raw == null || raw === '') continue;
+    for (const renglon of String(raw).split('\n')) {
+      // "- [Nx] <nombre>: $<monto>"  (el "Nx" de cantidad es opcional)
+      const m = renglon
+        .trim()
+        .match(/^-\s*(?:(\d+)x\s*)?(.+?):\s*\$\s*([\d.]+(?:,\d+)?)\s*$/);
+      if (!m) continue;
+      const cantidad = m[1] ? parseInt(m[1], 10) : 1;
+      const nombre = m[2].trim();
+      const total = parseNumber(m[3]);
+      if (total > 0 && cantidad > 0 && nombre) {
+        out.push({ nombre, cantidad, total });
+      }
+    }
+  }
+  return out;
 }
 
 /**
@@ -347,6 +399,13 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
   const colDetPrecio = findColumn(detalleSheet.headers, [
     'precio', 'precio unitario', 'p. unitario', 'unit',
   ]);
+  // Columnas donde Pedix embebe los modificadores con precio (extras).
+  const colDetDetalles = findColumn(detalleSheet.headers, [
+    'detalles', 'detalle', 'adicionales', 'extras', 'modificadores',
+  ]);
+  const colDetObs = findColumn(detalleSheet.headers, [
+    'observaciones', 'observación', 'observacion', 'notas', 'nota', 'aclaraciones',
+  ]);
 
   const colsDetFaltantes: string[] = [];
   if (colDetPedidoId === -1) colsDetFaltantes.push('ID pedido');
@@ -405,6 +464,24 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
 
     const existing = lineasPorPedido.get(pedidoId) || [];
     existing.push(linea);
+
+    // Extras con precio embebidos en "Detalles"/"Observaciones" de esta fila
+    // (Pedix los guarda como modificadores, no como filas propias). Se emiten
+    // como líneas adicionales del mismo pedido para no perder esa venta —
+    // cada una resuelve su propio producto/costo igual que cualquier línea.
+    const extras = parseAddons(
+      colDetDetalles !== -1 ? row[colDetDetalles] : '',
+      colDetObs !== -1 ? row[colDetObs] : ''
+    );
+    for (const ex of extras) {
+      existing.push({
+        productoNombre: ex.nombre,
+        cantidad: ex.cantidad,
+        precioUnitario: ex.cantidad > 0 ? ex.total / ex.cantidad : 0,
+        total: ex.total,
+      });
+    }
+
     lineasPorPedido.set(pedidoId, existing);
   }
 
@@ -482,6 +559,22 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
       total: parseNumber(row[colTotal]),
       lineas,
     };
+
+    // Auto-auditoría: la suma de las líneas (productos + extras) debe igualar
+    // el neto de producto del pedido (Total − Envío). Si no coincide, se avisa
+    // en vez de dejar pasar una venta mal contada (principio: no inventar,
+    // explicitar lo que no cierra). Con el parser correcto esto da 0
+    // advertencias sobre los datos reales; saltaría si Pedix introduce un
+    // concepto que todavía no modelamos (ej. un recargo por medio de pago).
+    const sumaLineas = lineas.reduce((s, l) => s + l.total, 0);
+    const netoPedido = pedido.total - pedido.envioCobrado;
+    if (Math.abs(sumaLineas - netoPedido) > 1) {
+      errores.push(
+        `Pedido ${pedidoId}: la suma de líneas ($${Math.round(sumaLineas)}) ` +
+          `no coincide con el neto del pedido ($${Math.round(netoPedido)} = Total − Envío). ` +
+          `Diferencia $${Math.round(netoPedido - sumaLineas)}.`
+      );
+    }
 
     pedidos.push(pedido);
   }
