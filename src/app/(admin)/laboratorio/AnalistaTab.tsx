@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, Plus, Archive, Trash2, BarChart3 } from 'lucide-react';
+import { Sparkles, Send, Plus, Archive, Trash2, BarChart3, Compass, Globe } from 'lucide-react';
 import { Button, Badge, SidePanel, Field, Input, useToast } from '@/components/ui';
 import { formatARS } from '@/lib/utils/format';
 import { buildRangoSemana, buildRangoMes, navegarRango, type Rango } from '@/lib/dashboard/rangos';
@@ -13,11 +13,14 @@ import {
   archivarConversacion,
   eliminarConversacion,
   guardarComoDecision,
+  listarEventos,
+  agregarEvento,
+  eliminarEvento,
   type ConversacionResumen,
   type ConversacionCompleta,
   type MensajeChat,
 } from './analista-actions';
-import type { ScopeAnalisis, RangoAnalisis, AnalisisPeriodo } from '@/lib/analisis/tipos';
+import type { ScopeAnalisis, RangoAnalisis, AnalisisPeriodo, EventoNegocio } from '@/lib/analisis/tipos';
 
 type TipoScope = 'semana' | 'mes' | 'comparacion';
 const aRango = (r: Rango): RangoAnalisis => ({ desde: r.desde, hasta: r.hasta, label: r.label });
@@ -77,9 +80,9 @@ export default function AnalistaTab() {
     return { tipo, a: aRango(rangoA) };
   }
 
-  async function handleAnalizar() {
+  async function handleAnalizar(scopeOverride?: ScopeAnalisis) {
     setGenerando(true);
-    const r = await iniciarConversacion(scopeActual());
+    const r = await iniciarConversacion(scopeOverride ?? scopeActual());
     if ('error' in r) { setGenerando(false); show(r.error, 'error'); return; }
     const conv = await obtenerConversacion(r.conversacionId);
     setGenerando(false);
@@ -203,7 +206,9 @@ export default function AnalistaTab() {
         {modo === 'nuevo' || !activa ? (
           <SelectorAlcance
             tipo={tipo} rangoA={rangoA} rangoB={rangoB} generando={generando}
-            onTipo={cambiarTipo} onNav={(cual, off) => rebuildRango(tipo, cual, off)} onAnalizar={handleAnalizar}
+            onTipo={cambiarTipo} onNav={(cual, off) => rebuildRango(tipo, cual, off)}
+            onAnalizar={() => handleAnalizar()}
+            onDiagnostico={() => handleAnalizar({ tipo: 'negocio', a: aRango(buildRangoSemana()) })}
           />
         ) : (
           <div className="space-y-4">
@@ -281,9 +286,9 @@ function Mensaje({ m, onGuardar }: { m: MensajeChat; onGuardar: (texto: string) 
   );
 }
 
-function SelectorAlcance({ tipo, rangoA, rangoB, generando, onTipo, onNav, onAnalizar }: {
+function SelectorAlcance({ tipo, rangoA, rangoB, generando, onTipo, onNav, onAnalizar, onDiagnostico }: {
   tipo: TipoScope; rangoA: Rango; rangoB: Rango; generando: boolean;
-  onTipo: (t: TipoScope) => void; onNav: (cual: 'a' | 'b', off: number) => void; onAnalizar: () => void;
+  onTipo: (t: TipoScope) => void; onNav: (cual: 'a' | 'b', off: number) => void; onAnalizar: () => void; onDiagnostico: () => void;
 }) {
   const navRow = (r: Rango, cual: 'a' | 'b', etiqueta?: string) => (
     <div className="flex items-center gap-2">
@@ -294,23 +299,93 @@ function SelectorAlcance({ tipo, rangoA, rangoB, generando, onTipo, onNav, onAna
     </div>
   );
   return (
-    <div className="mx-auto max-w-xl space-y-4 rounded-lg border border-border bg-surface p-5">
-      <div className="flex items-center gap-2 text-text-primary"><Sparkles className="h-5 w-5 text-brand" /><h2 className="text-base font-semibold">Nuevo análisis</h2></div>
-      <p className="text-sm text-text-secondary">Elegí qué querés que analice tu analista. Va a mirar todo el negocio del período (ventas, productos, días, promos, inversión, clientes) y después charlás con él.</p>
-      <div className="flex gap-2">
-        {(['semana', 'mes', 'comparacion'] as TipoScope[]).map((t) => (
-          <button key={t} onClick={() => onTipo(t)} className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium capitalize ${tipo === t ? 'border-brand-light bg-brand-light text-text-primary' : 'border-border text-text-secondary hover:bg-surface-alt'}`}>
-            {t === 'comparacion' ? 'Comparar' : t}
-          </button>
-        ))}
+    <div className="mx-auto max-w-xl space-y-4">
+      {/* ── Diagnóstico estratégico: la acción principal ── */}
+      <div className="space-y-3 rounded-lg border border-brand-light bg-surface p-5">
+        <div className="flex items-center gap-2 text-text-primary"><Compass className="h-5 w-5 text-brand" /><h2 className="text-base font-semibold">Diagnóstico estratégico del negocio</h2></div>
+        <p className="text-sm text-text-secondary">Tu asesor mira <strong>todo</strong>: las últimas ~16 semanas, costos, productos, promos semana a semana, publicidad (fría vs cálida), clientes que repiten y los que no, más los eventos que cargaste. Encuentra los puntos flojos y te arma un plan para subir la rentabilidad.</p>
+        <Button onClick={onDiagnostico} disabled={generando} className="w-full justify-center">
+          {generando ? 'Analizando…' : <><Compass className="h-4 w-4" /> Diagnosticar mi negocio</>}
+        </Button>
+        <EventosManager />
       </div>
-      <div className="space-y-2">
-        {tipo !== 'comparacion' ? navRow(rangoA, 'a') : (<>{navRow(rangoA, 'a', 'Período A')}{navRow(rangoB, 'b', 'Período B')}</>)}
+
+      {/* ── Análisis de un período puntual ── */}
+      <div className="space-y-4 rounded-lg border border-border bg-surface p-5">
+        <div className="flex items-center gap-2 text-text-primary"><Sparkles className="h-5 w-5 text-brand" /><h2 className="text-base font-semibold">…o analizá un período puntual</h2></div>
+        <p className="text-sm text-text-secondary">Una semana, un mes, o comparar dos períodos (ventas, productos, días, promos, inversión, clientes).</p>
+        <div className="flex gap-2">
+          {(['semana', 'mes', 'comparacion'] as TipoScope[]).map((t) => (
+            <button key={t} onClick={() => onTipo(t)} className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium capitalize ${tipo === t ? 'border-brand-light bg-brand-light text-text-primary' : 'border-border text-text-secondary hover:bg-surface-alt'}`}>
+              {t === 'comparacion' ? 'Comparar' : t}
+            </button>
+          ))}
+        </div>
+        <div className="space-y-2">
+          {tipo !== 'comparacion' ? navRow(rangoA, 'a') : (<>{navRow(rangoA, 'a', 'Período A')}{navRow(rangoB, 'b', 'Período B')}</>)}
+        </div>
+        <Button variant="secondary" onClick={onAnalizar} disabled={generando} className="w-full justify-center">
+          {generando ? 'Analizando…' : <><BarChart3 className="h-4 w-4" /> Analizar período</>}
+        </Button>
       </div>
-      <Button onClick={onAnalizar} disabled={generando} className="w-full justify-center">
-        {generando ? 'Analizando…' : <><BarChart3 className="h-4 w-4" /> Analizar</>}
-      </Button>
     </div>
+  );
+}
+
+// Gestor de "eventos del negocio": hechos del mundo real que los números no
+// cuentan y que el Analista debe tener en cuenta siempre (ej. "WhatsApp caído
+// desde 15-sep", "subí precios 8%"). Se guardan globalmente (configuracion).
+function EventosManager() {
+  const { show, Toast } = useToast();
+  const [eventos, setEventos] = useState<EventoNegocio[]>([]);
+  const [cargado, setCargado] = useState(false);
+  const [fecha, setFecha] = useState('');
+  const [desc, setDesc] = useState('');
+  const [guardando, setGuardando] = useState(false);
+
+  useEffect(() => { listarEventos().then((e) => { setEventos(e); setCargado(true); }).catch(() => setCargado(true)); }, []);
+
+  async function add() {
+    if (!fecha || !desc.trim() || guardando) return;
+    setGuardando(true);
+    const r = await agregarEvento(fecha, desc.trim());
+    setGuardando(false);
+    if ('error' in r) { show(r.error, 'error'); return; }
+    setEventos(r.eventos); setFecha(''); setDesc('');
+  }
+  async function del(e: EventoNegocio) {
+    const r = await eliminarEvento(e.fecha, e.descripcion);
+    if ('error' in r) { show(r.error, 'error'); return; }
+    setEventos(r.eventos);
+  }
+
+  return (
+    <details className="rounded-md border border-border bg-surface-alt">
+      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-text-secondary">
+        <Globe className="mr-1 inline h-3.5 w-3.5 -mt-0.5" />
+        Contexto del negocio{cargado && eventos.length > 0 ? ` (${eventos.length})` : ''} — lo que los números no cuentan
+      </summary>
+      <div className="space-y-2 border-t border-border p-3">
+        <p className="text-[11px] text-text-muted">Cargá hechos que el asesor debe considerar al diagnosticar (ej. “WhatsApp broadcast caído”, “subí precios 8%”, “feriado largo”). Se usan en todos los análisis.</p>
+        {eventos.length > 0 && (
+          <ul className="space-y-1">
+            {eventos.map((e, i) => (
+              <li key={`${e.fecha}-${i}`} className="flex items-start gap-2 text-xs">
+                <span className="shrink-0 font-mono text-text-muted">{e.fecha}</span>
+                <span className="flex-1 text-text-secondary">{e.descripcion}</span>
+                <button onClick={() => del(e)} title="Eliminar" className="shrink-0 text-text-muted hover:text-negative"><Trash2 className="h-3.5 w-3.5" /></button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <div className="flex items-end gap-2">
+          <input type="date" value={fecha} onChange={(ev) => setFecha(ev.target.value)} className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary" />
+          <input type="text" value={desc} onChange={(ev) => setDesc(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } }} placeholder="Qué pasó…" className="flex-1 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary placeholder:text-text-muted" />
+          <Button size="sm" variant="secondary" onClick={add} disabled={!fecha || !desc.trim() || guardando}><Plus className="h-3.5 w-3.5" /></Button>
+        </div>
+      </div>
+      <Toast />
+    </details>
   );
 }
 

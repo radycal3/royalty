@@ -107,7 +107,7 @@ async function compararPeriodos(admin: SupabaseClient, fechaA: string, fechaB: s
     admin,
     { tipo: 'comparacion', a: { desde: a.desde, hasta: a.hasta, label: a.label }, b: { desde: b.desde, hasta: b.hasta, label: b.label } },
     new Date().toISOString(),
-    { inversion: false, clientes: false, equipo: false, merma: false, tendencia: false }
+    { inversion: false, clientes: false, equipo: false, merma: false, tendencia: false, historia: false }
   );
   const top = (p: any) => p.productos.slice(0, 5).map((x: any) => ({ nombre: x.nombre, venta: r0(x.venta), margen: r1(x.margen) }));
   return {

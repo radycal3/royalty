@@ -5,6 +5,7 @@ import {
   ANALISTA_SYSTEM,
   CHAT_SYSTEM_EXTRA,
   INFORME_INSTRUCCION,
+  DIAGNOSTICO_ESTRATEGICO,
   MODELO_INFORME,
   MODELO_CHAT,
 } from '@/lib/laboratorio/prompts';
@@ -86,7 +87,12 @@ export async function POST(req: Request) {
   // Mensajes para la API: siempre arrancan con la instrucción del informe (turno
   // user), luego el historial guardado, luego la nueva pregunta. Garantiza
   // alternancia válida user/assistant empezando por user.
-  const apiMessagesRaw: Anthropic.MessageParam[] = [{ role: 'user', content: INFORME_INSTRUCCION }];
+  // El primer turno (sin mensajes) es el INFORME de período, salvo que el
+  // contexto sea un diagnóstico estratégico del negocio (scopeTipo 'negocio').
+  const scopeTipo = (conv.contexto as { scopeTipo?: string } | null)?.scopeTipo;
+  const instruccionInicial = scopeTipo === 'negocio' ? DIAGNOSTICO_ESTRATEGICO : INFORME_INSTRUCCION;
+
+  const apiMessagesRaw: Anthropic.MessageParam[] = [{ role: 'user', content: instruccionInicial }];
   for (const m of storedMsgs) apiMessagesRaw.push({ role: m.rol, content: m.contenido });
   if (mensaje) apiMessagesRaw.push({ role: 'user', content: mensaje });
   const apiMessages = normalizarAlternancia(apiMessagesRaw);

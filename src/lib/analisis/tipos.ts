@@ -146,17 +146,74 @@ export type TendenciaItem = {
   cerrada: boolean;
 };
 
+// ─── HISTORIA (la "película": últimas N semanas, para el asesor estratégico) ──
+
+export type PromoSemana = {
+  participacion: number; // % de ventas de la semana que fueron productos promo
+  margen: number;        // margen % de los productos promo esa semana
+  unidades: number;
+  venta: number;
+};
+
+export type HistoriaSemana = {
+  semana: string;        // fecha del viernes (YYYY-MM-DD)
+  label: string;
+  esPromo: boolean;      // participación de promo > umbral → fue "semana de promo"
+  ventas: number;
+  margenNeto: number;
+  beneficioNeto: number;
+  pedidos: number;
+  ticketPromedio: number;
+  publicidadPct: number;
+  roas: number;
+  resultadoDelivery: number;
+  pctVentasRepetidores: number | null;
+  promo: PromoSemana | null;
+};
+
+export type PubliSemanaHist = {
+  semana: string;        // fecha del viernes (YYYY-MM-DD)
+  gastoArs: number;
+  frio: { gastoArs: number; conversaciones: number; costoPorConversacion: number | null } | null;
+  calido: { gastoArs: number; conversaciones: number; costoPorConversacion: number | null } | null;
+};
+
+export type DecisionHist = {
+  periodoDesde: string;
+  area: string;
+  recomendacion: string;
+  estado: string;               // sugerida | decidida | evaluada
+  decisionTomada: string | null;
+  resultado: string | null;     // resultado medido tras el cierre (si existe)
+};
+
+export type Historia = {
+  semanas: HistoriaSemana[];      // orden cronológico: más vieja → más nueva
+  publiPorSemana: PubliSemanaHist[];
+  decisiones: DecisionHist[];     // decisiones pasadas con su resultado (memoria)
+};
+
+// Hechos del mundo real que los números no cuentan (cargados por el admin):
+// "WhatsApp broadcast caído desde 15-sep", "subí precios 8%", "feriado", etc.
+export type EventoNegocio = {
+  fecha: string;         // YYYY-MM-DD
+  descripcion: string;
+};
+
 export type ScopeAnalisis =
   | { tipo: 'semana'; a: RangoAnalisis }
   | { tipo: 'mes'; a: RangoAnalisis }
-  | { tipo: 'comparacion'; a: RangoAnalisis; b: RangoAnalisis };
+  | { tipo: 'comparacion'; a: RangoAnalisis; b: RangoAnalisis }
+  | { tipo: 'negocio'; a: RangoAnalisis }; // diagnóstico estratégico: a = última semana cerrada
 
 export type AnalisisCompleto = {
   generadoEn: string;        // ISO — se setea afuera (no usar new Date() en el módulo puro del server action)
-  scopeTipo: 'semana' | 'mes' | 'comparacion';
+  scopeTipo: 'semana' | 'mes' | 'comparacion' | 'negocio';
   periodoA: AnalisisPeriodo;
   periodoB?: AnalisisPeriodo;        // solo en comparacion
   deltas?: Record<string, { a: number; b: number; delta: number }>;  // solo en comparacion
   tendencia: TendenciaItem[];        // últimas N semanas (semana/mes)
   findes: number;                    // cantidad de fines de semana operativos en el período A
+  historia?: Historia;               // "la película": serie semanal + promos + publi + decisiones
+  eventos?: EventoNegocio[];         // hechos del mundo real cargados por el admin
 };

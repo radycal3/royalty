@@ -12,19 +12,28 @@ import type {
   Afinidad,
   AfinidadGrupo,
   ClientesResumen,
+  DecisionHist,
   DiaResumen,
   EquipoResumen,
+  EventoNegocio,
   Financiero,
+  Historia,
+  HistoriaSemana,
   Inversion,
   MermaResumen,
   ProductoLinea,
   PromosAnalisis,
+  PubliSemanaHist,
   RangoAnalisis,
   ScopeAnalisis,
   TendenciaItem,
 } from './tipos';
+import { periodoDeJS } from '@/lib/dashboard/rangos';
 
 const esPromo = (nombre: string) => /^\s*promo/i.test(nombre || '');
+const r0 = (n: number) => Math.round(n || 0);
+const r1 = (n: number) => Math.round((n || 0) * 10) / 10;
+const fmtD = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 
 // Áreas opcionales del análisis. El informe inicial las quiere TODAS (default).
 // Las herramientas de drill-down (ej. comparar_periodos) solo necesitan el
@@ -38,6 +47,7 @@ export type OpcionesAnalisis = {
   equipo?: boolean;    // métricas de equipo (default true)
   merma?: boolean;     // conteos de stock (default true)
   tendencia?: boolean; // últimas 8 semanas (default true)
+  historia?: boolean;  // "la película": serie semanal + promos + publi + decisiones + eventos (default true)
 };
 
 const CLIENTES_VACIO: ClientesResumen = {
@@ -377,6 +387,173 @@ async function construirTendencia(admin: SupabaseClient, hastaRef: string, n: nu
   })).reverse();
 }
 
+// ─── HISTORIA: "la película" (serie semanal para el asesor estratégico) ──────
+// Todo sale de tablas YA precomputadas al cerrar cada semana (periodos,
+// periodos_productos, meta_ads_detalle) + el loop de decisiones. Son lecturas
+// indexadas y baratas → se arman una sola vez al congelar el contexto.
+
+const UMBRAL_PROMO_PCT = 15; // participación de productos "PROMO…" para marcar "semana de promo"
+
+async function construirHistoria(
+  admin: SupabaseClient,
+  hastaRef: string,
+  nSemanas: number,
+  primerPedido: Map<string, string>,
+  activas: Set<string>
+): Promise<Historia> {
+  // 1) Semanas cerradas (KPIs ya calculados) hasta la fecha de referencia.
+  const { data: pers } = await admin
+    .from('periodos')
+    .select('id, label, desde, ventas, margen_neto, beneficio_neto, pedidos, ticket_promedio, publicidad_pct, roas, resultado_delivery')
+    .eq('tipo', 'semana')
+    .lte('desde', hastaRef)
+    .order('desde', { ascending: false })
+    .limit(nSemanas);
+  const periodos = (pers || []).slice().reverse(); // cronológico: viejo → nuevo
+  const periodoIds = periodos.map((p: any) => p.id);
+  const desdeVentana = periodos.length ? periodos[0].desde : hastaRef;
+
+  // 2) En paralelo: promo por semana, repetidores % por semana, publi por semana, decisiones.
+  const [promoPorPeriodo, repPorViernes, publiPorSemana, decisiones] = await Promise.all([
+    promoPorPeriodoMap(admin, periodoIds),
+    repetidoresPorSemana(admin, desdeVentana, hastaRef, primerPedido, activas),
+    publiHistoria(admin, desdeVentana, hastaRef),
+    decisionesHistoria(admin),
+  ]);
+
+  const semanas: HistoriaSemana[] = periodos.map((p: any) => {
+    const pa = promoPorPeriodo.get(p.id);
+    const participacion = pa && p.ventas > 0 ? (pa.venta / p.ventas) * 100 : 0;
+    const promo = pa
+      ? { participacion: r1(participacion), margen: pa.venta > 0 ? r1((pa.beneficio / pa.venta) * 100) : 0, unidades: pa.unidades, venta: r0(pa.venta) }
+      : null;
+    return {
+      semana: p.desde,
+      label: p.label,
+      esPromo: participacion > UMBRAL_PROMO_PCT,
+      ventas: r0(p.ventas),
+      margenNeto: r1(p.margen_neto),
+      beneficioNeto: r0(p.beneficio_neto),
+      pedidos: p.pedidos,
+      ticketPromedio: r0(p.ticket_promedio),
+      publicidadPct: r1(p.publicidad_pct),
+      roas: r1(p.roas),
+      resultadoDelivery: r0(p.resultado_delivery),
+      pctVentasRepetidores: repPorViernes.has(p.desde) ? repPorViernes.get(p.desde)! : null,
+      promo,
+    };
+  });
+
+  return { semanas, publiPorSemana, decisiones };
+}
+
+async function promoPorPeriodoMap(admin: SupabaseClient, periodoIds: string[]): Promise<Map<string, { venta: number; beneficio: number; unidades: number }>> {
+  const out = new Map<string, { venta: number; beneficio: number; unidades: number }>();
+  if (periodoIds.length === 0) return out;
+  const { data } = await admin
+    .from('periodos_productos')
+    .select('periodo_id, producto_nombre, unidades, venta, beneficio')
+    .in('periodo_id', periodoIds);
+  for (const row of data || []) {
+    if (!esPromo((row as any).producto_nombre)) continue;
+    const e = out.get((row as any).periodo_id) || { venta: 0, beneficio: 0, unidades: 0 };
+    e.venta += Number((row as any).venta) || 0;
+    e.beneficio += Number((row as any).beneficio) || 0;
+    e.unidades += Number((row as any).unidades) || 0;
+    out.set((row as any).periodo_id, e);
+  }
+  return out;
+}
+
+// Repetidores % de ventas por semana operativa (viernes). Reusa primerPedido
+// (misma definición que analizarPeriodo: cliente con compra previa a este pedido).
+async function repetidoresPorSemana(
+  admin: SupabaseClient,
+  desde: string,
+  hasta: string,
+  primerPedido: Map<string, string>,
+  activas: Set<string>
+): Promise<Map<string, number>> {
+  const pedidos = await cargarPedidos(admin, desde, hasta, activas);
+  const porSemana = new Map<string, { ventas: number; ventasRep: number }>();
+  for (const p of pedidos) {
+    const vie = fmtD(periodoDeJS(new Date(p.fecha + 'T12:00:00')));
+    let venta = 0;
+    for (const l of p.pedidos_lineas || []) venta += l.precio_unitario_vendido * l.cantidad;
+    const primera = p.cliente_id ? primerPedido.get(p.cliente_id) : undefined;
+    const rep = !!(primera && primera < p.fecha);
+    const e = porSemana.get(vie) || { ventas: 0, ventasRep: 0 };
+    e.ventas += venta;
+    if (rep) e.ventasRep += venta;
+    porSemana.set(vie, e);
+  }
+  const out = new Map<string, number>();
+  for (const [vie, e] of porSemana) out.set(vie, e.ventas > 0 ? r1((e.ventasRep / e.ventas) * 100) : 0);
+  return out;
+}
+
+async function publiHistoria(admin: SupabaseClient, desde: string, hasta: string): Promise<PubliSemanaHist[]> {
+  const { data } = await admin
+    .from('meta_ads_detalle')
+    .select('periodo_desde, tipo_audiencia, gasto_ars, conversaciones')
+    .gte('periodo_desde', desde)
+    .lte('periodo_desde', hasta);
+  const m = new Map<string, { gastoArs: number; frio: { g: number; c: number }; calido: { g: number; c: number } }>();
+  for (const d of data || []) {
+    const sem = (d as any).periodo_desde as string;
+    const e = m.get(sem) || { gastoArs: 0, frio: { g: 0, c: 0 }, calido: { g: 0, c: 0 } };
+    const g = Number((d as any).gasto_ars) || 0;
+    const c = Number((d as any).conversaciones) || 0;
+    e.gastoArs += g;
+    const bucket = (d as any).tipo_audiencia === 'fría' ? e.frio : e.calido;
+    bucket.g += g;
+    bucket.c += c;
+    m.set(sem, e);
+  }
+  return [...m.entries()]
+    .sort((a, b) => (a[0] < b[0] ? -1 : 1))
+    .map(([semana, e]) => ({
+      semana,
+      gastoArs: r0(e.gastoArs),
+      frio: e.frio.g > 0 ? { gastoArs: r0(e.frio.g), conversaciones: e.frio.c, costoPorConversacion: e.frio.c > 0 ? r0(e.frio.g / e.frio.c) : null } : null,
+      calido: e.calido.g > 0 ? { gastoArs: r0(e.calido.g), conversaciones: e.calido.c, costoPorConversacion: e.calido.c > 0 ? r0(e.calido.g / e.calido.c) : null } : null,
+    }));
+}
+
+async function decisionesHistoria(admin: SupabaseClient): Promise<DecisionHist[]> {
+  const { data } = await admin
+    .from('decisiones_laboratorio')
+    .select('periodo_desde, area, recomendacion, estado, decision_tomada, resultado')
+    .order('periodo_desde', { ascending: false })
+    .limit(20);
+  return (data || []).map((d: any) => ({
+    periodoDesde: d.periodo_desde,
+    area: d.area,
+    recomendacion: d.recomendacion,
+    estado: d.estado,
+    decisionTomada: d.decision_tomada,
+    resultado: d.resultado,
+  }));
+}
+
+// Eventos del mundo real (guardados en configuracion.clave='negocio_eventos' como
+// JSON — sin tabla nueva). Los más recientes primero.
+async function construirEventos(admin: SupabaseClient): Promise<EventoNegocio[]> {
+  const { data } = await admin.from('configuracion').select('valor').eq('clave', 'negocio_eventos').maybeSingle();
+  if (!data?.valor) return [];
+  try {
+    const arr = JSON.parse(data.valor);
+    if (!Array.isArray(arr)) return [];
+    return arr
+      .filter((e: any) => e && e.fecha && e.descripcion)
+      .map((e: any) => ({ fecha: String(e.fecha), descripcion: String(e.descripcion) }))
+      .sort((a: EventoNegocio, b: EventoNegocio) => (a.fecha < b.fecha ? 1 : -1))
+      .slice(0, 30);
+  } catch {
+    return [];
+  }
+}
+
 // ─── Orquestador ────────────────────────────────────────────────────────────
 
 export async function construirAnalisisCompleto(
@@ -401,13 +578,22 @@ export async function construirAnalisisCompleto(
 
   const tendencia = opts.tendencia === false ? [] : await construirTendencia(admin, scope.a.hasta, 8);
 
+  // "La película": serie semanal + promos + publi + decisiones + eventos. Solo
+  // en el contexto congelado (informe/estratégico), no en las herramientas lite.
+  const [historia, eventos] = opts.historia === false
+    ? [undefined, undefined]
+    : await Promise.all([
+        construirHistoria(admin, scope.a.hasta, 16, primerPedido, activas),
+        construirEventos(admin),
+      ]);
+
   if (scope.tipo === 'comparacion') {
     const periodoB = await analizarPeriodo(admin, scope.b, productosMap, idsHamburguesa, primerPedido, activas, opts);
     const deltas = construirDeltas(periodoA.financiero, periodoB.financiero);
-    return { generadoEn, scopeTipo: 'comparacion', periodoA, periodoB, deltas, tendencia, findes };
+    return { generadoEn, scopeTipo: 'comparacion', periodoA, periodoB, deltas, tendencia, findes, historia, eventos };
   }
 
-  return { generadoEn, scopeTipo: scope.tipo, periodoA, tendencia, findes };
+  return { generadoEn, scopeTipo: scope.tipo, periodoA, tendencia, findes, historia, eventos };
 }
 
 function contarViernes(desde: string, hasta: string): number {
