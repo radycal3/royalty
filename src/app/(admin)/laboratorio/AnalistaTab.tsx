@@ -1,7 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { Sparkles, Send, Plus, Archive, Trash2, BarChart3, Compass, Globe } from 'lucide-react';
+import { Sparkles, Send, Plus, Archive, Trash2, BarChart3, Compass, Globe, MessageCircle, BookOpen, Brain } from 'lucide-react';
 import { Button, Badge, SidePanel, Field, Input, useToast } from '@/components/ui';
 import { formatARS } from '@/lib/utils/format';
 import { buildRangoSemana, buildRangoMes, navegarRango, type Rango } from '@/lib/dashboard/rangos';
@@ -13,17 +13,25 @@ import {
   archivarConversacion,
   eliminarConversacion,
   guardarComoDecision,
-  listarEventos,
+  obtenerConocimiento,
+  guardarFicha,
+  agregarNotaMemoria,
+  eliminarNotaMemoria,
   agregarEvento,
   eliminarEvento,
   type ConversacionResumen,
   type ConversacionCompleta,
   type MensajeChat,
+  type NotaMemoria,
+  type EventoConId,
 } from './analista-actions';
-import type { ScopeAnalisis, RangoAnalisis, AnalisisPeriodo, EventoNegocio } from '@/lib/analisis/tipos';
+import type { ScopeAnalisis, RangoAnalisis, AnalisisPeriodo } from '@/lib/analisis/tipos';
 
 type TipoScope = 'semana' | 'mes' | 'comparacion';
 const aRango = (r: Rango): RangoAnalisis => ({ desde: r.desde, hasta: r.hasta, label: r.label });
+const ETIQUETA_MODO: Record<string, string> = {
+  semana: 'semana', mes: 'mes', comparacion: 'comparación', negocio: 'diagnóstico', charla: 'charla',
+};
 
 export default function AnalistaTab() {
   const { show, Toast } = useToast();
@@ -94,6 +102,22 @@ export default function AnalistaTab() {
     await streamChat(conv.id, undefined, conv);
   }
 
+  // Charla: arranca directo con la pregunta de Lucas (sin informe previo).
+  async function handleCharla(pregunta: string) {
+    const msg = pregunta.trim();
+    if (!msg) return;
+    setGenerando(true);
+    const r = await iniciarConversacion({ tipo: 'charla', a: aRango(buildRangoSemana()) }, msg);
+    if ('error' in r) { setGenerando(false); show(r.error, 'error'); return; }
+    const conv = await obtenerConversacion(r.conversacionId);
+    setGenerando(false);
+    if ('error' in conv) { show(conv.error, 'error'); return; }
+    setActiva(conv);
+    setModo('conversacion');
+    await loadConvs();
+    await streamChat(conv.id, msg, conv);
+  }
+
   async function abrirConversacion(id: string) {
     setCargandoConv(true);
     const conv = await obtenerConversacion(id);
@@ -101,8 +125,9 @@ export default function AnalistaTab() {
     if ('error' in conv) { show(conv.error, 'error'); return; }
     setActiva(conv);
     setModo('conversacion');
-    // Si no tiene ningún mensaje (informe no generado), generarlo.
-    if (conv.mensajes.length === 0) await streamChat(conv.id, undefined, conv);
+    // Si no tiene ningún mensaje (informe no generado), generarlo. Una charla
+    // sin mensajes espera la pregunta de Lucas.
+    if (conv.mensajes.length === 0 && conv.contexto.scopeTipo !== 'charla') await streamChat(conv.id, undefined, conv);
   }
 
   async function streamChat(conversacionId: string, mensaje: string | undefined, convRef: ConversacionCompleta) {
@@ -184,7 +209,7 @@ export default function AnalistaTab() {
       {/* ── Sidebar: conversaciones ── */}
       <aside className="space-y-2">
         <Button variant="secondary" size="sm" onClick={() => { setModo('nuevo'); setActiva(null); }} className="w-full justify-center">
-          <Plus className="h-4 w-4" /> Nuevo análisis
+          <Plus className="h-4 w-4" /> Nueva charla o análisis
         </Button>
         <div className="space-y-1">
           {convs.length === 0 && <p className="px-1 text-xs text-text-muted">Todavía no hay análisis. Creá el primero.</p>}
@@ -209,12 +234,13 @@ export default function AnalistaTab() {
             onTipo={cambiarTipo} onNav={(cual, off) => rebuildRango(tipo, cual, off)}
             onAnalizar={() => handleAnalizar()}
             onDiagnostico={() => handleAnalizar({ tipo: 'negocio', a: aRango(buildRangoSemana()) })}
+            onCharla={handleCharla}
           />
         ) : (
           <div className="space-y-4">
             <div className="flex items-center justify-between gap-2">
               <h2 className="text-base font-semibold text-text-primary">{activa.titulo}</h2>
-              <Badge color="gray">{activa.scopeTipo}</Badge>
+              <Badge color="gray">{ETIQUETA_MODO[activa.contexto.scopeTipo] || activa.scopeTipo}</Badge>
             </div>
             <DatosDuros contexto={activa.contexto} />
             {/* Chat */}
@@ -236,7 +262,7 @@ export default function AnalistaTab() {
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); enviar(); } }}
-                placeholder="Preguntale al analista… (ej: ¿qué promo escalo? ¿por qué cayó el margen?)"
+                placeholder="Hablá con tu socio… (ej: ¿la gente vuelve a comprar? ¿muevo la publicidad a miércoles-viernes?)"
                 rows={2}
                 disabled={streaming}
                 className="min-h-[44px] flex-1 resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-brand-light disabled:opacity-60"
@@ -286,10 +312,12 @@ function Mensaje({ m, onGuardar }: { m: MensajeChat; onGuardar: (texto: string) 
   );
 }
 
-function SelectorAlcance({ tipo, rangoA, rangoB, generando, onTipo, onNav, onAnalizar, onDiagnostico }: {
+function SelectorAlcance({ tipo, rangoA, rangoB, generando, onTipo, onNav, onAnalizar, onDiagnostico, onCharla }: {
   tipo: TipoScope; rangoA: Rango; rangoB: Rango; generando: boolean;
   onTipo: (t: TipoScope) => void; onNav: (cual: 'a' | 'b', off: number) => void; onAnalizar: () => void; onDiagnostico: () => void;
+  onCharla: (pregunta: string) => void;
 }) {
+  const [pregunta, setPregunta] = useState('');
   const navRow = (r: Rango, cual: 'a' | 'b', etiqueta?: string) => (
     <div className="flex items-center gap-2">
       {etiqueta && <span className="w-16 text-xs text-text-muted">{etiqueta}</span>}
@@ -300,14 +328,33 @@ function SelectorAlcance({ tipo, rangoA, rangoB, generando, onTipo, onNav, onAna
   );
   return (
     <div className="mx-auto max-w-xl space-y-4">
-      {/* ── Diagnóstico estratégico: la acción principal ── */}
+      {/* ── Charla con el socio: la acción principal ── */}
       <div className="space-y-3 rounded-lg border border-brand-light bg-surface p-5">
+        <div className="flex items-center gap-2 text-text-primary"><MessageCircle className="h-5 w-5 text-brand" /><h2 className="text-base font-semibold">Charlá con tu socio</h2></div>
+        <p className="text-sm text-text-secondary">Traé una idea, una duda o una decisión. Tu socio ya tiene todos los números del negocio (ventas, promos, clientes que vuelven y los que no, publicidad, cadetería) y lo que hablaron antes. Te dice qué apoyan los datos, qué no se puede saber y cómo probarlo.</p>
+        <textarea
+          value={pregunta}
+          onChange={(e) => setPregunta(e.target.value)}
+          onKeyDown={(e) => { if (e.key === 'Enter' && !e.shiftKey && pregunta.trim() && !generando) { e.preventDefault(); onCharla(pregunta); } }}
+          rows={3}
+          placeholder="Ej: estoy pensando en mover el presupuesto de Meta de viernes-domingo a miércoles-viernes para llenar la comunidad de WhatsApp. ¿Qué dicen los números?"
+          className="w-full resize-none rounded-md border border-border bg-surface px-3 py-2 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:ring-1 focus:ring-brand-light"
+        />
+        <Button onClick={() => onCharla(pregunta)} disabled={generando || !pregunta.trim()} className="w-full justify-center">
+          {generando ? 'Preparando los datos…' : <><Send className="h-4 w-4" /> Empezar la charla</>}
+        </Button>
+      </div>
+
+      {/* ── Lo que el socio sabe del negocio ── */}
+      <ConocimientoManager />
+
+      {/* ── Diagnóstico estratégico ── */}
+      <div className="space-y-3 rounded-lg border border-border bg-surface p-5">
         <div className="flex items-center gap-2 text-text-primary"><Compass className="h-5 w-5 text-brand" /><h2 className="text-base font-semibold">Diagnóstico estratégico del negocio</h2></div>
-        <p className="text-sm text-text-secondary">Tu asesor mira <strong>todo</strong>: las últimas ~16 semanas, costos, productos, promos semana a semana, publicidad (fría vs cálida), clientes que repiten y los que no, más los eventos que cargaste. Encuentra los puntos flojos y te arma un plan para subir la rentabilidad.</p>
-        <Button onClick={onDiagnostico} disabled={generando} className="w-full justify-center">
+        <p className="text-sm text-text-secondary">Un informe completo: dónde está parado el negocio, si estás construyendo clientes que vuelven, los puntos flojos estructurales (costos, promos, publicidad, cadetería) y un plan priorizado con cómo medirlo.</p>
+        <Button variant="secondary" onClick={onDiagnostico} disabled={generando} className="w-full justify-center">
           {generando ? 'Analizando…' : <><Compass className="h-4 w-4" /> Diagnosticar mi negocio</>}
         </Button>
-        <EventosManager />
       </div>
 
       {/* ── Análisis de un período puntual ── */}
@@ -332,20 +379,49 @@ function SelectorAlcance({ tipo, rangoA, rangoB, generando, onTipo, onNav, onAna
   );
 }
 
-// Gestor de "eventos del negocio": hechos del mundo real que los números no
-// cuentan y que el Analista debe tener en cuenta siempre (ej. "WhatsApp caído
-// desde 15-sep", "subí precios 8%"). Se guardan globalmente (configuracion).
-function EventosManager() {
+// Lo que el socio sabe de Royalty y los números no cuentan: la FICHA del
+// negocio, su MEMORIA entre charlas (notas de Lucas o del propio asesor) y los
+// EVENTOS del mundo real. Tabla admin-only analista_conocimiento.
+function ConocimientoManager() {
   const { show, Toast } = useToast();
-  const [eventos, setEventos] = useState<EventoNegocio[]>([]);
   const [cargado, setCargado] = useState(false);
+  const [ficha, setFicha] = useState('');
+  const [fichaGuardada, setFichaGuardada] = useState('');
+  const [memoria, setMemoria] = useState<NotaMemoria[]>([]);
+  const [eventos, setEventos] = useState<EventoConId[]>([]);
+  const [nota, setNota] = useState('');
   const [fecha, setFecha] = useState('');
   const [desc, setDesc] = useState('');
   const [guardando, setGuardando] = useState(false);
 
-  useEffect(() => { listarEventos().then((e) => { setEventos(e); setCargado(true); }).catch(() => setCargado(true)); }, []);
+  useEffect(() => {
+    obtenerConocimiento()
+      .then((c) => { setFicha(c.ficha); setFichaGuardada(c.ficha); setMemoria(c.memoria); setEventos(c.eventos); setCargado(true); })
+      .catch(() => setCargado(true));
+  }, []);
 
-  async function add() {
+  async function saveFicha() {
+    setGuardando(true);
+    const r = await guardarFicha(ficha);
+    setGuardando(false);
+    if ('error' in r) { show(r.error, 'error'); return; }
+    setFichaGuardada(ficha.trim());
+    show('Ficha guardada — tu socio la usa desde el próximo mensaje');
+  }
+  async function addNota() {
+    if (!nota.trim() || guardando) return;
+    setGuardando(true);
+    const r = await agregarNotaMemoria(nota);
+    setGuardando(false);
+    if ('error' in r) { show(r.error, 'error'); return; }
+    setMemoria(r.memoria); setNota('');
+  }
+  async function delNota(id: string) {
+    const r = await eliminarNotaMemoria(id);
+    if ('error' in r) { show(r.error, 'error'); return; }
+    setMemoria(r.memoria);
+  }
+  async function addEvento() {
     if (!fecha || !desc.trim() || guardando) return;
     setGuardando(true);
     const r = await agregarEvento(fecha, desc.trim());
@@ -353,36 +429,73 @@ function EventosManager() {
     if ('error' in r) { show(r.error, 'error'); return; }
     setEventos(r.eventos); setFecha(''); setDesc('');
   }
-  async function del(e: EventoNegocio) {
-    const r = await eliminarEvento(e.fecha, e.descripcion);
+  async function delEvento(id: string) {
+    const r = await eliminarEvento(id);
     if ('error' in r) { show(r.error, 'error'); return; }
     setEventos(r.eventos);
   }
 
+  const inputCls = 'rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary placeholder:text-text-muted';
   return (
-    <details className="rounded-md border border-border bg-surface-alt">
-      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-text-secondary">
-        <Globe className="mr-1 inline h-3.5 w-3.5 -mt-0.5" />
-        Contexto del negocio{cargado && eventos.length > 0 ? ` (${eventos.length})` : ''} — lo que los números no cuentan
+    <details className="rounded-lg border border-border bg-surface">
+      <summary className="cursor-pointer px-5 py-3 text-sm font-medium text-text-primary">
+        <BookOpen className="mr-1.5 inline h-4 w-4 -mt-0.5 text-brand" />
+        Lo que tu socio sabe de Royalty
+        {cargado && <span className="ml-1 text-xs font-normal text-text-muted">· {memoria.length} nota{memoria.length === 1 ? '' : 's'} · {eventos.length} evento{eventos.length === 1 ? '' : 's'}</span>}
       </summary>
-      <div className="space-y-2 border-t border-border p-3">
-        <p className="text-[11px] text-text-muted">Cargá hechos que el asesor debe considerar al diagnosticar (ej. “WhatsApp broadcast caído”, “subí precios 8%”, “feriado largo”). Se usan en todos los análisis.</p>
-        {eventos.length > 0 && (
-          <ul className="space-y-1">
-            {eventos.map((e, i) => (
-              <li key={`${e.fecha}-${i}`} className="flex items-start gap-2 text-xs">
-                <span className="shrink-0 font-mono text-text-muted">{e.fecha}</span>
-                <span className="flex-1 text-text-secondary">{e.descripcion}</span>
-                <button onClick={() => del(e)} title="Eliminar" className="shrink-0 text-text-muted hover:text-negative"><Trash2 className="h-3.5 w-3.5" /></button>
-              </li>
-            ))}
-          </ul>
-        )}
-        <div className="flex items-end gap-2">
-          <input type="date" value={fecha} onChange={(ev) => setFecha(ev.target.value)} className="rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary" />
-          <input type="text" value={desc} onChange={(ev) => setDesc(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); add(); } }} placeholder="Qué pasó…" className="flex-1 rounded-md border border-border bg-surface px-2 py-1 text-xs text-text-primary placeholder:text-text-muted" />
-          <Button size="sm" variant="secondary" onClick={add} disabled={!fecha || !desc.trim() || guardando}><Plus className="h-3.5 w-3.5" /></Button>
-        </div>
+      <div className="space-y-5 border-t border-border p-5">
+        {/* Ficha */}
+        <section className="space-y-2">
+          <h3 className="text-xs font-semibold text-text-primary">Ficha del negocio</h3>
+          <p className="text-[11px] text-text-muted">Cómo funciona Royalty: canales, horarios y presupuesto de publicidad, cadetería, proyectos en curso, hipótesis que querés evaluar. Tu socio la lee en cada mensaje.</p>
+          <textarea value={ficha} onChange={(e) => setFicha(e.target.value)} rows={10} className="w-full rounded-md border border-border bg-surface px-3 py-2 text-xs leading-relaxed text-text-primary" />
+          <div className="flex justify-end">
+            <Button size="sm" onClick={saveFicha} disabled={guardando || ficha.trim() === fichaGuardada.trim()}>Guardar ficha</Button>
+          </div>
+        </section>
+
+        {/* Memoria */}
+        <section className="space-y-2">
+          <h3 className="flex items-center gap-1 text-xs font-semibold text-text-primary"><Brain className="h-3.5 w-3.5 text-brand" /> Memoria</h3>
+          <p className="text-[11px] text-text-muted">Decisiones, experimentos y aprendizajes que tu socio recuerda entre charlas. Él mismo anota cuando decidís algo; podés agregar o borrar.</p>
+          {memoria.length > 0 && (
+            <ul className="space-y-1">
+              {memoria.map((n) => (
+                <li key={n.id} className="flex items-start gap-2 text-xs">
+                  <span className="shrink-0 font-mono text-text-muted">{n.fecha}</span>
+                  <span className="flex-1 text-text-secondary">{n.texto}{n.origen === 'asesor' && <span className="ml-1 text-text-muted">(anotó tu socio)</span>}</span>
+                  <button onClick={() => delNota(n.id)} title="Borrar" className="shrink-0 text-text-muted hover:text-negative"><Trash2 className="h-3.5 w-3.5" /></button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-end gap-2">
+            <input type="text" value={nota} onChange={(ev) => setNota(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); addNota(); } }} placeholder="Ej: desde el 20-oct la publicidad corre Mié-Vie hacia la comunidad" className={`flex-1 ${inputCls}`} />
+            <Button size="sm" variant="secondary" onClick={addNota} disabled={!nota.trim() || guardando}><Plus className="h-3.5 w-3.5" /></Button>
+          </div>
+        </section>
+
+        {/* Eventos */}
+        <section className="space-y-2">
+          <h3 className="flex items-center gap-1 text-xs font-semibold text-text-primary"><Globe className="h-3.5 w-3.5 text-brand" /> Eventos del mundo real</h3>
+          <p className="text-[11px] text-text-muted">Hechos fechados que los números no cuentan (ej. “WhatsApp broadcast caído”, “subí precios 8%”, “feriado largo”), para no atribuir mal las causas.</p>
+          {eventos.length > 0 && (
+            <ul className="space-y-1">
+              {eventos.map((e) => (
+                <li key={e.id} className="flex items-start gap-2 text-xs">
+                  <span className="shrink-0 font-mono text-text-muted">{e.fecha}</span>
+                  <span className="flex-1 text-text-secondary">{e.descripcion}</span>
+                  <button onClick={() => delEvento(e.id)} title="Eliminar" className="shrink-0 text-text-muted hover:text-negative"><Trash2 className="h-3.5 w-3.5" /></button>
+                </li>
+              ))}
+            </ul>
+          )}
+          <div className="flex items-end gap-2">
+            <input type="date" value={fecha} onChange={(ev) => setFecha(ev.target.value)} className={inputCls} />
+            <input type="text" value={desc} onChange={(ev) => setDesc(ev.target.value)} onKeyDown={(ev) => { if (ev.key === 'Enter') { ev.preventDefault(); addEvento(); } }} placeholder="Qué pasó…" className={`flex-1 ${inputCls}`} />
+            <Button size="sm" variant="secondary" onClick={addEvento} disabled={!fecha || !desc.trim() || guardando}><Plus className="h-3.5 w-3.5" /></Button>
+          </div>
+        </section>
       </div>
       <Toast />
     </details>
@@ -402,10 +515,27 @@ function DatosDuros({ contexto }: { contexto: ConversacionCompleta['contexto'] }
   const p: AnalisisPeriodo = contexto.periodoA;
   const f = p.financiero;
   const pct = (n: number) => `${n.toFixed(1)}%`;
+  // Recompra: promedio de las cohortes que ya cumplieron 30 días (sin las
+  // primeras semanas "infladas" por clientes previos al sistema).
+  const rc = contexto.historia?.recompra;
+  const maduras = (rc?.cohortes || []).filter((c) => c.pct30d !== null && !c.inflada);
+  const totNuevos = maduras.reduce((a, c) => a + c.nuevos, 0);
+  const ret30 = totNuevos > 0 ? (maduras.reduce((a, c) => a + (c.volvieron30d || 0), 0) / totNuevos) * 100 : null;
+  const ultSem = rc?.semanas[rc.semanas.length - 1];
   return (
     <details className="rounded-lg border border-border bg-surface" open>
-      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-text-secondary">Datos duros del período (calculados por el sistema)</summary>
+      <summary className="cursor-pointer px-3 py-2 text-xs font-medium text-text-secondary">
+        Datos duros{contexto.scopeTipo === 'charla' || contexto.scopeTipo === 'negocio' ? ` — última semana cerrada (${p.rango.label})` : ' del período'} (calculados por el sistema)
+      </summary>
       <div className="space-y-3 border-t border-border p-3">
+        {rc && (
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+            <Stat label="Clientes únicos" valor={String(rc.clientesUnicos)} />
+            <Stat label="Compraron 1 sola vez" valor={pct(rc.pctUnaSolaVez)} color={rc.pctUnaSolaVez > 70 ? 'text-negative' : undefined} />
+            <Stat label="Vuelven a los 30 días" valor={ret30 === null ? '—' : pct(ret30)} />
+            <Stat label="Nuevos última semana" valor={ultSem ? `${ultSem.clientesNuevos} de ${ultSem.clientesUnicos}` : '—'} />
+          </div>
+        )}
         <div className="grid grid-cols-3 gap-2 sm:grid-cols-6">
           <Stat label="Ventas" valor={formatARS(f.ventas)} />
           <Stat label="Beneficio neto" valor={formatARS(f.beneficioNeto)} color={f.beneficioNeto < 0 ? 'text-negative' : 'text-positive'} />

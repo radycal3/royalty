@@ -187,10 +187,121 @@ export type DecisionHist = {
   resultado: string | null;     // resultado medido tras el cierre (si existe)
 };
 
+// ─── ADQUISICIÓN Y RECOMPRA ("¿la gente vuelve?") ───────────────────────────
+// Nuevo = primera compra registrada del cliente (por celular). Ver `advertencia`:
+// los datos arrancan en `datosDesde`, así que en las primeras semanas aparecen
+// como "nuevos" clientes que ya compraban antes del sistema.
+
+export type AdquisicionSemana = {
+  semana: string;                 // viernes de la semana operativa
+  pedidos: number;                // pedidos con cliente identificado
+  clientesUnicos: number;
+  clientesNuevos: number;         // primera compra de su vida esa semana
+  clientesQueVolvieron: number;   // ya habían comprado en una semana anterior
+  pctPedidosDeNuevos: number;
+  gastoPublicidad: number;        // gastos_operativos categoría publicidad de esa semana (Vie→Jue)
+  costoPublicidadPorClienteNuevo: number | null;
+};
+
+export type CohorteSemana = {
+  semana: string;                 // semana de la PRIMERA compra
+  nuevos: number;
+  volvieron30d: number | null;    // null = la cohorte todavía no cumplió 30 días
+  pct30d: number | null;
+  volvieron60d: number | null;
+  pct60d: number | null;
+  volvieronHastaHoy: number;      // recompra alguna vez (crece con el tiempo: no comparar cohortes viejas con nuevas)
+  inflada: boolean;               // primeras 4 semanas de datos: incluye clientes previos al sistema
+};
+
+export type Recompra = {
+  datosDesde: string;             // primer pedido registrado en el sistema
+  datosHasta: string;             // último pedido importado (los cálculos de recencia/madurez usan esta fecha)
+  advertencia: string;
+  clientesUnicos: number;
+  compraronUnaSolaVez: number;
+  pctUnaSolaVez: number;
+  distribucionCompras: { compras: string; clientes: number }[];  // 1, 2, 3, 4-5, 6+
+  medianaDiasPrimeraASegunda: number | null;
+  pctSegundaCompraDentroDe30d: number | null;  // de los que volvieron, cuántos lo hicieron en ≤30 días
+  recencia: { activos0a14: number; enfriandose15a45: number; enRiesgoMasDe45: number };
+  semanas: AdquisicionSemana[];   // cronológico
+  cohortes: CohorteSemana[];      // cronológico
+};
+
+// ─── HORARIO ────────────────────────────────────────────────────────────────
+export type HorarioFranja = {
+  dia: 'Viernes' | 'Sábado' | 'Domingo';
+  hora: string;                   // "19", "20", … (hora de inicio)
+  pedidos: number;
+  pctDeNuevos: number;            // % de esos pedidos que fueron primera compra del cliente
+};
+export type HorarioResumen = {
+  pedidosConHora: number;
+  pctPedidosEntre19y2230: number;
+  franjas: HorarioFranja[];
+};
+
+// ─── DELIVERY / CADETERÍA ───────────────────────────────────────────────────
+export type DeliverySemana = {
+  semana: string;
+  pedidosConEnvio: number;
+  enviosCobrados: number;
+  cadetesNoche: number;           // jornadas de cadete cargadas (1 cadete × 1 noche)
+  viajes: number;
+  pagosCadetes: number;
+  costoEmpresaCadeteria: number;
+  resultado: number;              // envíos cobrados − pagos − costo empresa
+  costoPorViaje: number | null;   // (pagos + costo empresa) / viajes
+  envioPromedioCobrado: number | null;
+  viajesPorCadeteNoche: number | null;
+  jornadasPagadasAlMinimo: number; // jornadas donde el cadete cobró la base mínima (pocos viajes)
+};
+export type DeliveryDia = {
+  dia: 'Viernes' | 'Sábado' | 'Domingo';
+  noches: number;
+  pedidosConEnvioPromedio: number;
+  cadetesPromedio: number;
+  viajesPorCadetePromedio: number | null;
+  pctJornadasAlMinimo: number | null;
+  resultadoPromedio: number;
+};
+export type DeliveryResumen = {
+  configuracionActual: { baseMinima: number | null; valorViaje: number | null; costoEmpresaPorCadete: number | null; viajesParaSuperarMinimo: number | null };
+  viajesPorPedidoConEnvio: number | null; // viajes cargados / pedidos con envío en la ventana
+  nota: string;
+  semanas: DeliverySemana[];
+  porDia: DeliveryDia[];
+  tramosEnvioCobrado: { monto: number; pedidos: number }[]; // distribución del cargo de envío (≈ zonas)
+};
+
+// ─── ENTREGA / PAGO / CUPONES (columnas de Pedix capturadas desde la migración 041) ──
+export type EntregaPagoSemana = {
+  semana: string;
+  pedidosConDato: number;
+  pctDelivery: number | null;
+  pctRetiro: number | null;
+  pctTransferencia: number | null;
+  pctEfectivo: number | null;
+  descuentoTotal: number | null;  // plata "regalada" en descuentos esa semana
+  pedidosConCupon: number;
+};
+export type CuponResumen = { cupon: string; pedidos: number; clientes: number; primeraVez: string; ultimaVez: string };
+export type EntregaPago =
+  | { semanas: EntregaPagoSemana[]; cupones: CuponResumen[]; pedidosSinDato: number }
+  | 'sin_datos_todavia';
+
 export type Historia = {
   semanas: HistoriaSemana[];      // orden cronológico: más vieja → más nueva
   publiPorSemana: PubliSemanaHist[];
   decisiones: DecisionHist[];     // decisiones pasadas con su resultado (memoria)
+  // Los bloques de clientes y operación usan TODOS los datos importados (no solo
+  // semanas cerradas): pueden llegar más adelante que historia.semanas.
+  ventanaClientesYOperacion?: { desde: string; hasta: string };
+  recompra?: Recompra;            // adquisición, cohortes, recencia
+  horario?: HorarioResumen;
+  delivery?: DeliveryResumen;
+  entregaPago?: EntregaPago;
 };
 
 // Hechos del mundo real que los números no cuentan (cargados por el admin):
@@ -204,11 +315,12 @@ export type ScopeAnalisis =
   | { tipo: 'semana'; a: RangoAnalisis }
   | { tipo: 'mes'; a: RangoAnalisis }
   | { tipo: 'comparacion'; a: RangoAnalisis; b: RangoAnalisis }
-  | { tipo: 'negocio'; a: RangoAnalisis }; // diagnóstico estratégico: a = última semana cerrada
+  | { tipo: 'negocio'; a: RangoAnalisis }  // diagnóstico estratégico: a = última semana cerrada
+  | { tipo: 'charla'; a: RangoAnalisis };  // charla libre con el socio: mismo contexto que 'negocio', sin informe inicial
 
 export type AnalisisCompleto = {
   generadoEn: string;        // ISO — se setea afuera (no usar new Date() en el módulo puro del server action)
-  scopeTipo: 'semana' | 'mes' | 'comparacion' | 'negocio';
+  scopeTipo: 'semana' | 'mes' | 'comparacion' | 'negocio' | 'charla';
   periodoA: AnalisisPeriodo;
   periodoB?: AnalisisPeriodo;        // solo en comparacion
   deltas?: Record<string, { a: number; b: number; delta: number }>;  // solo en comparacion

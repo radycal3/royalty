@@ -66,6 +66,25 @@ Qué se cambió (deployado a `main`, commit `869dd20`):
 
 ---
 
+## 0.2 EL ANALISTA PASA A SER "TU SOCIO" (sesión 11-oct-2026)
+
+Intención de Lucas (textual en espíritu): no tiene con quién hablar de los resultados; quiere un socio con todo el contexto del negocio para debatir decisiones (promos, cadetería, si la gente vuelve, dónde poner la publicidad, la comunidad "Royal Family"). Cambios (commit de esta sesión):
+
+- **Migración 041 (`041_analista_socio.sql`)** — ⚠️ aplicar en el SQL editor ANTES de deployar el código (el import inserta columnas nuevas y el chat usa la tabla nueva):
+  - `pedidos`: `tipo_entrega`, `medio_pago`, `cupon`, `descuento` (suma positiva de descuentos Pedix, informativa), `origen_venta`. Nullable, descriptivas (no congeladas). El parser (`pedix-parser.ts`) ya las lee ("Forma de entrega", "Método de pago", "Cupón", "Descuento *", "Origen venta") e `importar-core.ts` las guarda.
+  - Tabla **`analista_conocimiento`** (admin-only): `tipo` ficha/evento/nota. Reemplaza `configuracion.negocio_eventos` (los migra y borra esa clave) porque **`configuracion` tiene policy `empleado_read`** → estrategia/presupuesto no pueden vivir ahí (principio 2.10). Siembra una ficha inicial con lo que contó Lucas.
+  - CHECK de `laboratorio_conversaciones.scope_tipo` admite `negocio` y `charla` (se terminó el hack de guardar 'negocio' como 'semana').
+- **Backfill** de las columnas nuevas desde los 42 Excel de ~/Downloads: script `backfill-041.js` (parser real compilado, solo `UPDATE` de columnas nuevas donde `tipo_entrega IS NULL`). Dry-run: 1723/1723 pedidos con dato; 93% delivery; nunca se usó un cupón.
+- **Motor** — `src/lib/analisis/clientes-operacion.ts` (nuevo) agrega a `historia`: `recompra` (clientes únicos, % una sola compra, distribución, días 1ra→2da compra, recencia, serie semanal nuevos vs. vuelven con costo de publi por cliente nuevo, **cohortes** a 30/60 días con flags de madurez e "inflada"), `horario` (día×hora con % de primera compra), `delivery` (cadetería por semana y por día: viajes, costo por viaje, jornadas pagadas al mínimo, tramos de envío) y `entregaPago` (delivery/retiro, transferencia/efectivo, descuentos, cupones). Ventana de 26 semanas; en negocio/charla los bloques de clientes llegan al último finde importado aunque no esté cerrado (`ventanaClientesYOperacion`). Una sola lectura liviana de pedidos reemplaza `primerPedidoPorCliente`.
+  - ⚠️ Cohortes: las primeras 4 semanas (abr-may) están "infladas" (clientes previos al sistema cuentan como nuevos). Decisión "cohortes fuera de scope" (sección 11) **revertida por pedido de Lucas** el 11-oct.
+  - ⚠️ Cadetería: los viajes cargados son ~1,4× (algunas noches 2×) los pedidos con envío. No está claro qué cuenta como "viaje" — el bloque lo advierte y la IA debe preguntar. Pendiente confirmarlo con Lucas.
+- **Modo "Charla"** (scope `charla`): conversación directa sin informe previo, prompt `CHARLA_INSTRUCCION` (qué dicen los datos a favor/en contra, qué no se puede saber, riesgos, cómo probarlo como experimento, opinión honesta). Es la acción principal de la UI.
+- **Ficha + memoria**: el route lee ficha y memoria en CADA turno (no se congelan) y las pone después del breakpoint de caché (`bloqueConocimiento`, incluye "HOY" en hora ARG). Herramienta `recordar` = el asesor anota decisiones/experimentos solo. UI "Lo que tu socio sabe de Royalty" (ficha editable, memoria, eventos).
+- **Herramientas nuevas** (`tools.ts`): `antes_y_despues` (medir un experimento: N semanas antes vs. desde una fecha, financiero de semanas cerradas + adquisición + cupones), `adquisicion_semana`, `recordar`, y segmento `una_compra_recientes` en `listar_clientes_segmento`.
+- **Modelo**: `claude-opus-5-5` para informe y chat (antes Opus 4.8 + Sonnet 5), vía `anthropic.beta.messages.stream` con fallback server-side a `claude-opus-4-8` (`server-side-fallback-2026-06-01`). Effort `high` en informe/charla, `medium` en repreguntas. Las tools van siempre en la request (`tool_choice: none` en el informe) para compartir prefijo de caché. Herramientas en paralelo, `is_error` en fallas, manejo de `refusal`/`max_tokens`. `maxDuration = 300`. El loop viejo de "Generar recomendaciones" (Decisiones) NO se tocó (sigue en Opus 4.8).
+
+---
+
 ## 1. CONTEXTO DEL PROYECTO
 
 **Negocio:** Royalty Burgers. Hamburguesería que opera viernes, sábado y domingo. El "período operativo" es Vie-Sáb-Dom.

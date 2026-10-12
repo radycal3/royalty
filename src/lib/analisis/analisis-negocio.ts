@@ -29,6 +29,18 @@ import type {
   TendenciaItem,
 } from './tipos';
 import { periodoDeJS } from '@/lib/dashboard/rangos';
+import {
+  cargarPedidosLivianos,
+  primerPedidoDe,
+  publicidadPorSemana,
+  construirRecompra,
+  construirHorario,
+  construirDelivery,
+  construirEntregaPago,
+  ventanaClientes,
+  type PedidoLiviano,
+} from './clientes-operacion';
+import { leerEventos } from '@/lib/laboratorio/conocimiento';
 
 const esPromo = (nombre: string) => /^\s*promo/i.test(nombre || '');
 const r0 = (n: number) => Math.round(n || 0);
@@ -93,30 +105,6 @@ async function cargarPedidos(admin: SupabaseClient, desde: string, hasta: string
     from += 1000;
   }
   return all.filter((p) => activas.has(p.importacion_id));
-}
-
-// Primer pedido histórico por cliente (para clasificar repetidor vs nuevo).
-async function primerPedidoPorCliente(admin: SupabaseClient, activas: Set<string>): Promise<Map<string, string>> {
-  let all: any[] = [];
-  let from = 0;
-  while (true) {
-    const { data } = await admin
-      .from('pedidos')
-      .select('cliente_id, fecha, importacion_id')
-      .not('cliente_id', 'is', null)
-      .range(from, from + 999);
-    if (!data || data.length === 0) break;
-    all = all.concat(data);
-    if (data.length < 1000) break;
-    from += 1000;
-  }
-  const m = new Map<string, string>();
-  for (const p of all) {
-    if (!activas.has(p.importacion_id)) continue;
-    const prev = m.get(p.cliente_id);
-    if (prev === undefined || p.fecha < prev) m.set(p.cliente_id, p.fecha);
-  }
-  return m;
 }
 
 // ─── Análisis de un período ────────────────────────────────────────────────
@@ -393,13 +381,18 @@ async function construirTendencia(admin: SupabaseClient, hastaRef: string, n: nu
 // indexadas y baratas → se arman una sola vez al congelar el contexto.
 
 const UMBRAL_PROMO_PCT = 15; // participación de productos "PROMO…" para marcar "semana de promo"
+// Ventana de la película: ~6 meses (hoy cubre todo el histórico, que arranca en
+// abril 2026). Son lecturas de tablas de cierre + una lectura liviana de pedidos.
+const SEMANAS_HISTORIA = 26;
 
 async function construirHistoria(
   admin: SupabaseClient,
   hastaRef: string,
   nSemanas: number,
   primerPedido: Map<string, string>,
-  activas: Set<string>
+  activas: Set<string>,
+  pedidosLivianos: PedidoLiviano[],
+  ventanaCli: { desde: string; hasta: string }
 ): Promise<Historia> {
   // 1) Semanas cerradas (KPIs ya calculados) hasta la fecha de referencia.
   const { data: pers } = await admin
@@ -414,11 +407,13 @@ async function construirHistoria(
   const desdeVentana = periodos.length ? periodos[0].desde : hastaRef;
 
   // 2) En paralelo: promo por semana, repetidores % por semana, publi por semana, decisiones.
-  const [promoPorPeriodo, repPorViernes, publiPorSemana, decisiones] = await Promise.all([
+  const [promoPorPeriodo, repPorViernes, publiPorSemana, decisiones, publiGastos, delivery] = await Promise.all([
     promoPorPeriodoMap(admin, periodoIds),
     repetidoresPorSemana(admin, desdeVentana, hastaRef, primerPedido, activas),
     publiHistoria(admin, desdeVentana, hastaRef),
     decisionesHistoria(admin),
+    publicidadPorSemana(admin, ventanaCli.desde, ventanaCli.hasta),
+    construirDelivery(admin, pedidosLivianos, ventanaCli.desde, ventanaCli.hasta),
   ]);
 
   const semanas: HistoriaSemana[] = periodos.map((p: any) => {
@@ -444,7 +439,16 @@ async function construirHistoria(
     };
   });
 
-  return { semanas, publiPorSemana, decisiones };
+  return {
+    semanas,
+    publiPorSemana,
+    decisiones,
+    ventanaClientesYOperacion: ventanaCli,
+    recompra: construirRecompra(pedidosLivianos, ventanaCli.desde, ventanaCli.hasta, publiGastos),
+    horario: construirHorario(pedidosLivianos, ventanaCli.desde, ventanaCli.hasta),
+    delivery,
+    entregaPago: construirEntregaPago(pedidosLivianos, ventanaCli.desde, ventanaCli.hasta),
+  };
 }
 
 async function promoPorPeriodoMap(admin: SupabaseClient, periodoIds: string[]): Promise<Map<string, { venta: number; beneficio: number; unidades: number }>> {
@@ -536,22 +540,9 @@ async function decisionesHistoria(admin: SupabaseClient): Promise<DecisionHist[]
   }));
 }
 
-// Eventos del mundo real (guardados en configuracion.clave='negocio_eventos' como
-// JSON — sin tabla nueva). Los más recientes primero.
+// Eventos del mundo real (tabla admin-only analista_conocimiento, migración 041).
 async function construirEventos(admin: SupabaseClient): Promise<EventoNegocio[]> {
-  const { data } = await admin.from('configuracion').select('valor').eq('clave', 'negocio_eventos').maybeSingle();
-  if (!data?.valor) return [];
-  try {
-    const arr = JSON.parse(data.valor);
-    if (!Array.isArray(arr)) return [];
-    return arr
-      .filter((e: any) => e && e.fecha && e.descripcion)
-      .map((e: any) => ({ fecha: String(e.fecha), descripcion: String(e.descripcion) }))
-      .sort((a: EventoNegocio, b: EventoNegocio) => (a.fecha < b.fecha ? 1 : -1))
-      .slice(0, 30);
-  } catch {
-    return [];
-  }
+  return (await leerEventos(admin)).map(({ fecha, descripcion }) => ({ fecha, descripcion }));
 }
 
 // ─── Orquestador ────────────────────────────────────────────────────────────
@@ -563,11 +554,12 @@ export async function construirAnalisisCompleto(
   opts: OpcionesAnalisis = {}
 ): Promise<AnalisisCompleto> {
   const activas = await activasSet(admin);
-  const [{ data: prodRows }, { data: hamRows }, primerPedido] = await Promise.all([
+  const [{ data: prodRows }, { data: hamRows }, pedidosLivianos] = await Promise.all([
     admin.from('productos').select('id, nombre, categoria'),
     admin.from('productos').select('id').eq('categoria', 'hamburguesa'),
-    primerPedidoPorCliente(admin, activas),
+    cargarPedidosLivianos(admin, activas),
   ]);
+  const primerPedido = primerPedidoDe(pedidosLivianos);
   const productosMap = new Map<string, { nombre: string; categoria: string }>((prodRows || []).map((p: any) => [p.id, { nombre: p.nombre, categoria: p.categoria }]));
   const idsHamburguesa = new Set<string>((hamRows || []).map((p: any) => p.id));
 
@@ -583,7 +575,12 @@ export async function construirAnalisisCompleto(
   const [historia, eventos] = opts.historia === false
     ? [undefined, undefined]
     : await Promise.all([
-        construirHistoria(admin, scope.a.hasta, 16, primerPedido, activas),
+        construirHistoria(
+          admin, scope.a.hasta, SEMANAS_HISTORIA, primerPedido, activas, pedidosLivianos,
+          // En diagnóstico/charla los bloques de clientes llegan hasta el último
+          // finde importado aunque todavía no esté cerrado.
+          ventanaClientes(pedidosLivianos, scope.a.hasta, SEMANAS_HISTORIA, scope.tipo === 'negocio' || scope.tipo === 'charla')
+        ),
         construirEventos(admin),
       ]);
 

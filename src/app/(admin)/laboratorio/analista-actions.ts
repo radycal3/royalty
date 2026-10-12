@@ -5,6 +5,16 @@ import { createAdminClient } from '@/lib/supabase/admin';
 import { construirAnalisisCompleto } from '@/lib/analisis/analisis-negocio';
 import type { ScopeAnalisis, AnalisisCompleto, RangoAnalisis, EventoNegocio } from '@/lib/analisis/tipos';
 import { MODELO_INFORME, MODELO_CHAT } from '@/lib/laboratorio/prompts';
+import {
+  agregarNota,
+  borrarConocimiento,
+  guardarFichaTexto,
+  leerEventos,
+  leerFicha,
+  leerMemoria,
+  type EventoConId,
+  type NotaMemoria,
+} from '@/lib/laboratorio/conocimiento';
 
 async function exigirAdmin() {
   const supabase = await createClient();
@@ -45,12 +55,14 @@ function tituloDeScope(scope: ScopeAnalisis): string {
   if (scope.tipo === 'comparacion') return `Comparación: ${scope.a.label} vs ${scope.b.label}`;
   if (scope.tipo === 'mes') return `Mes: ${scope.a.label}`;
   if (scope.tipo === 'negocio') return `Diagnóstico del negocio — ${scope.a.label}`;
+  if (scope.tipo === 'charla') return `Charla`;
   return `Semana: ${scope.a.label}`;
 }
 
 // ─── Iniciar conversación: calcula el análisis y lo congela ────────────────
 export async function iniciarConversacion(
-  scope: ScopeAnalisis
+  scope: ScopeAnalisis,
+  tituloCharla?: string
 ): Promise<{ conversacionId: string } | { error: string }> {
   const userId = await exigirAdmin();
   if (!process.env.ANTHROPIC_API_KEY) {
@@ -58,10 +70,10 @@ export async function iniciarConversacion(
   }
   const admin = createAdminClient();
 
-  // Diagnóstico estratégico: no se elige semana, se analiza "el negocio" tomando
-  // como ancla la última semana CERRADA (+ la historia de las últimas ~16).
+  // Diagnóstico estratégico y charla: no se elige semana, se mira "el negocio"
+  // tomando como ancla la última semana CERRADA (+ toda la historia).
   let scopeUsado: ScopeAnalisis = scope;
-  if (scope.tipo === 'negocio') {
+  if (scope.tipo === 'negocio' || scope.tipo === 'charla') {
     const { data: ult } = await admin
       .from('periodos')
       .select('desde, hasta, label')
@@ -69,7 +81,7 @@ export async function iniciarConversacion(
       .order('desde', { ascending: false })
       .limit(1)
       .maybeSingle();
-    if (ult) scopeUsado = { tipo: 'negocio', a: { desde: ult.desde, hasta: ult.hasta, label: ult.label } };
+    if (ult) scopeUsado = { tipo: scope.tipo, a: { desde: ult.desde, hasta: ult.hasta, label: ult.label } };
   }
 
   let contexto: AnalisisCompleto;
@@ -79,13 +91,16 @@ export async function iniciarConversacion(
     return { error: 'Error al construir el análisis: ' + (e instanceof Error ? e.message : String(e)) };
   }
 
+  // Título de la charla: su primera pregunta (recortada), así se reconoce en la lista.
+  const titulo = scopeUsado.tipo === 'charla' && tituloCharla?.trim()
+    ? `Charla: ${tituloCharla.trim().replace(/\s+/g, ' ').slice(0, 70)}${tituloCharla.trim().length > 70 ? '…' : ''}`
+    : tituloDeScope(scopeUsado);
+
   const { data, error } = await admin
     .from('laboratorio_conversaciones')
     .insert({
-      titulo: tituloDeScope(scopeUsado),
-      // La columna scope_tipo tiene CHECK IN (semana, mes, comparacion); el modo
-      // real ('negocio') viaja en el jsonb `scope` y en contexto.scopeTipo.
-      scope_tipo: scopeUsado.tipo === 'negocio' ? 'semana' : scopeUsado.tipo,
+      titulo,
+      scope_tipo: scopeUsado.tipo,
       scope: scopeUsado,
       contexto,
       modelo_informe: MODELO_INFORME,
@@ -186,63 +201,60 @@ export async function guardarComoDecision(input: {
   return { success: true };
 }
 
-// ─── Eventos del negocio (contexto cualitativo del mundo real) ──────────────
-// Se guardan en configuracion.clave='negocio_eventos' como JSON (sin tabla
-// nueva). El Analista los recibe SIEMPRE en el contexto para no atribuir mal
-// las causas (ej. "WhatsApp caído desde 15-sep").
+// ─── Lo que el socio sabe del negocio: ficha, memoria y eventos ─────────────
+// Tabla admin-only analista_conocimiento (migración 041). El Analista lee la
+// ficha y la memoria en CADA turno (no se congelan) y los eventos al crear el
+// análisis.
 
-function parseEventos(valor: string | null | undefined): EventoNegocio[] {
-  if (!valor) return [];
-  try {
-    const a = JSON.parse(valor);
-    if (!Array.isArray(a)) return [];
-    return a
-      .filter((e: any) => e && e.fecha && e.descripcion)
-      .map((e: any) => ({ fecha: String(e.fecha), descripcion: String(e.descripcion) }))
-      .sort((x: EventoNegocio, y: EventoNegocio) => (x.fecha < y.fecha ? 1 : -1));
-  } catch {
-    return [];
-  }
-}
+export type Conocimiento = { ficha: string; memoria: NotaMemoria[]; eventos: EventoConId[] };
 
-async function leerEventos(admin: ReturnType<typeof createAdminClient>): Promise<EventoNegocio[]> {
-  const { data } = await admin.from('configuracion').select('valor').eq('clave', 'negocio_eventos').maybeSingle();
-  return parseEventos(data?.valor);
-}
-
-async function guardarEventos(admin: ReturnType<typeof createAdminClient>, eventos: EventoNegocio[]) {
-  return admin.from('configuracion').upsert(
-    { clave: 'negocio_eventos', valor: JSON.stringify(eventos), descripcion: 'Eventos del mundo real para el Analista' },
-    { onConflict: 'clave' }
-  );
-}
-
-export async function listarEventos(): Promise<EventoNegocio[]> {
+export async function obtenerConocimiento(): Promise<Conocimiento> {
   await exigirAdmin();
-  return leerEventos(createAdminClient());
+  const admin = createAdminClient();
+  const [ficha, memoria, eventos] = await Promise.all([leerFicha(admin), leerMemoria(admin), leerEventos(admin)]);
+  return { ficha, memoria, eventos };
 }
 
-export async function agregarEvento(fecha: string, descripcion: string): Promise<{ eventos: EventoNegocio[] } | { error: string }> {
+export async function guardarFicha(texto: string): Promise<{ success: true } | { error: string }> {
+  await exigirAdmin();
+  const { error } = await guardarFichaTexto(createAdminClient(), (texto || '').trim());
+  if (error) return { error: error.message };
+  return { success: true };
+}
+
+export async function agregarNotaMemoria(texto: string): Promise<{ memoria: NotaMemoria[] } | { error: string }> {
+  await exigirAdmin();
+  const admin = createAdminClient();
+  const r = await agregarNota(admin, texto, 'lucas');
+  if ('error' in r) return { error: r.error };
+  return { memoria: await leerMemoria(admin) };
+}
+
+export async function eliminarNotaMemoria(id: string): Promise<{ memoria: NotaMemoria[] } | { error: string }> {
+  await exigirAdmin();
+  const admin = createAdminClient();
+  const { error } = await borrarConocimiento(admin, id, 'nota');
+  if (error) return { error: error.message };
+  return { memoria: await leerMemoria(admin) };
+}
+
+export async function agregarEvento(fecha: string, descripcion: string): Promise<{ eventos: EventoConId[] } | { error: string }> {
   await exigirAdmin();
   const f = (fecha || '').trim();
   const d = (descripcion || '').trim();
   if (!f || !d) return { error: 'Faltan fecha o descripción' };
   const admin = createAdminClient();
-  const arr = await leerEventos(admin);
-  arr.push({ fecha: f, descripcion: d });
-  const ordenado = arr.sort((a, b) => (a.fecha < b.fecha ? 1 : -1));
-  const { error } = await guardarEventos(admin, ordenado);
+  const { error } = await admin.from('analista_conocimiento').insert({ tipo: 'evento', fecha: f, texto: d, origen: 'lucas' });
   if (error) return { error: error.message };
-  return { eventos: ordenado };
+  return { eventos: await leerEventos(admin) };
 }
 
-export async function eliminarEvento(fecha: string, descripcion: string): Promise<{ eventos: EventoNegocio[] } | { error: string }> {
+export async function eliminarEvento(id: string): Promise<{ eventos: EventoConId[] } | { error: string }> {
   await exigirAdmin();
   const admin = createAdminClient();
-  const arr = (await leerEventos(admin)).filter((e) => !(e.fecha === fecha && e.descripcion === descripcion));
-  const { error } = await guardarEventos(admin, arr);
+  const { error } = await borrarConocimiento(admin, id, 'evento');
   if (error) return { error: error.message };
-  return { eventos: arr };
+  return { eventos: await leerEventos(admin) };
 }
 
-export type { ScopeAnalisis, RangoAnalisis, EventoNegocio };
+export type { ScopeAnalisis, RangoAnalisis, EventoNegocio, NotaMemoria, EventoConId };

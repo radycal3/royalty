@@ -183,6 +183,13 @@ export async function importarPedidosCore(
           cliente_celular: pedido.celular || null,
           cliente_nombre: pedido.cliente || null,
           cliente_direccion: pedido.direccion || null,
+          // Descriptivos (migración 041) — para el Analista: entrega, pago,
+          // cupón (ej. el de la Royal Family) y descuento aplicado.
+          tipo_entrega: pedido.tipoEntrega || null,
+          medio_pago: pedido.medioPago || null,
+          cupon: pedido.cupon || null,
+          descuento: pedido.descuento ?? null,
+          origen_venta: pedido.origenVenta || null,
         })
         .select('id')
         .single();

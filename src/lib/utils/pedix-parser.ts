@@ -19,6 +19,9 @@ export type PedidoParsed = {
   direccion: string | null;
   tipoEntrega: string | null;
   medioPago: string | null;
+  cupon: string | null;
+  descuento: number | null;      // suma positiva de los descuentos de Pedix (null si no hay columnas)
+  origenVenta: string | null;
   envioCobrado: number;
   total: number;
   lineas: LineaParsed[];
@@ -327,12 +330,24 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
   const colDireccion = findColumn(pedidosSheet.headers, [
     'dirección', 'direccion', 'address', 'domicilio',
   ]);
+  // Nombres exactos del Excel real de Pedix primero ("Forma de entrega",
+  // "Método de pago"); los fragmentos quedan como respaldo. Sin 'envío' como
+  // candidato: por substring engancharía "Cargos Envío".
   const colTipoEntrega = findColumn(pedidosSheet.headers, [
-    'entrega', 'tipo', 'envío', 'envio', 'delivery', 'retiro',
+    'forma de entrega', 'tipo de entrega', 'entrega', 'delivery', 'retiro',
   ]);
   const colMedioPago = findColumn(pedidosSheet.headers, [
-    'pago', 'medio', 'forma de pago',
+    'método de pago', 'metodo de pago', 'medio de pago', 'forma de pago',
   ]);
+  const colCupon = findColumn(pedidosSheet.headers, ['cupón', 'cupon']);
+  const colOrigen = findColumn(pedidosSheet.headers, ['origen venta', 'origen']);
+  // Descuentos: Pedix los separa en varias columnas (valores negativos). Solo
+  // matcheo exacto: son nombres específicos y un substring mezclaría columnas.
+  const colsDescuento = [
+    'descuento producto', 'descuento promociones', 'descuento cupón', 'descuento cupon', 'descuento pago',
+  ]
+    .map((n) => pedidosSheet.headers.indexOf(n))
+    .filter((i, k, arr) => i !== -1 && arr.indexOf(i) === k);
   // FIX: el Excel real de Pedix usa "Cargos Envío" (plural) — el header
   // normalizado a lowercase queda "cargos envío". Las variantes en
   // singular ('cargo envío', 'costo envío', etc.) no hacían match porque
@@ -555,6 +570,12 @@ export function parsePedixExcel(buffer: ArrayBuffer): ParseResult {
         colMedioPago !== -1
           ? String(row[colMedioPago] ?? '').trim() || null
           : null,
+      cupon: colCupon !== -1 ? String(row[colCupon] ?? '').trim() || null : null,
+      descuento:
+        colsDescuento.length > 0
+          ? colsDescuento.reduce((acc, i) => acc + Math.abs(parseNumber(row[i])), 0)
+          : null,
+      origenVenta: colOrigen !== -1 ? String(row[colOrigen] ?? '').trim() || null : null,
       envioCobrado: colEnvio !== -1 ? parseNumber(row[colEnvio]) : 0,
       total: parseNumber(row[colTotal]),
       lineas,
