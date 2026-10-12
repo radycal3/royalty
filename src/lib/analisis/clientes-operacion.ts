@@ -294,9 +294,23 @@ export async function construirDelivery(
   const baseMinima = cfg.get('cadete_base_minima') ?? null;
   const valorViaje = cfg.get('cadete_valor_viaje') ?? null;
 
-  // Por noche (fecha): pedidos con envío y lo cobrado.
-  const noche = new Map<string, { pedidosEnvio: number; envios: number; cadetes: number; viajes: number; pagos: number; empresa: number; alMinimo: number }>();
-  const nuevaNoche = () => ({ pedidosEnvio: 0, envios: 0, cadetes: 0, viajes: 0, pagos: 0, empresa: 0, alMinimo: 0 });
+  // Modelo de Lucas: un "viaje" es una UNIDAD de distancia (simple = 1, doble =
+  // 2…). El cadete cobra el mayor entre la base mínima y viajes × valor por
+  // viaje; el cliente paga en Pedix unidades × valor + un margen (hoy 2.500 /
+  // 4.500 / 6.500…, antes 2.000 / 4.000 / 6.000). Si el cadete supera la base,
+  // el envío lo pagan los clientes; lo que se pierde es el COMPLEMENTO para
+  // llegar a la base en noches flojas, más el costo fijo de la empresa.
+  // Descomposición exacta: resultado = margenEnvios − complementoBaseMinima − costoEmpresa.
+  const valorRef = valorViaje || 2000;
+  const unidadesDeEnvio = (env: number): number | null => {
+    if (env >= valorRef && env % valorRef === 0) return env / valorRef;                 // tarifa vieja, sin margen
+    const conMargen = env - (env % valorRef);
+    if (env > valorRef && conMargen > 0) return conMargen / valorRef;                     // tarifa con margen (ej. 4.500 → 2)
+    return null;
+  };
+  type Acum = { pedidosEnvio: number; envios: number; unidadesCobradas: number; pedidosSinUnidad: number; cadetes: number; viajes: number; valorViajes: number; pagos: number; complemento: number; empresa: number; alMinimo: number };
+  const noche = new Map<string, Acum>();
+  const nuevaNoche = (): Acum => ({ pedidosEnvio: 0, envios: 0, unidadesCobradas: 0, pedidosSinUnidad: 0, cadetes: 0, viajes: 0, valorViajes: 0, pagos: 0, complemento: 0, empresa: 0, alMinimo: 0 });
   const tramos = new Map<number, number>();
   for (const p of pedidos) {
     if (p.fecha < desdeVentana || p.fecha > hastaRef) continue;
@@ -304,28 +318,36 @@ export async function construirDelivery(
     if (env <= 0) continue;
     const e = noche.get(p.fecha) || nuevaNoche();
     e.pedidosEnvio++; e.envios += env;
+    const u = unidadesDeEnvio(env);
+    if (u === null) e.pedidosSinUnidad++; else e.unidadesCobradas += u;
     noche.set(p.fecha, e);
     tramos.set(env, (tramos.get(env) || 0) + 1);
   }
   for (const j of jornadas || []) {
     const e = noche.get((j as any).fecha) || nuevaNoche();
     const viajes = Number((j as any).viajes_realizados) || 0;
+    const valorViajes = viajes * (Number((j as any).cadete_valor_viaje_usado) || 0);
+    const pago = Number((j as any).pago_cadete) || 0;
     e.cadetes++;
     e.viajes += viajes;
-    e.pagos += Number((j as any).pago_cadete) || 0;
+    e.valorViajes += valorViajes;
+    e.pagos += pago;
+    e.complemento += Math.max(0, pago - valorViajes);
     e.empresa += Number((j as any).costo_empresa_cadete_usado) || 0;
-    if (viajes * (Number((j as any).cadete_valor_viaje_usado) || 0) < (Number((j as any).cadete_base_minima_usada) || 0)) e.alMinimo++;
+    if (valorViajes < (Number((j as any).cadete_base_minima_usada) || 0)) e.alMinimo++;
     noche.set((j as any).fecha, e);
   }
   if (noche.size === 0) return undefined;
 
-  // Semanas.
+  // Semanas. Solo noches con jornadas de cadetes cargadas: una noche con envíos
+  // cobrados pero sin cadetes cargados parecería ganancia pura (no lo es).
+  const nochesSinCadetes = [...noche.entries()].filter(([, e]) => e.cadetes === 0 && e.pedidosEnvio > 0).map(([f]) => f).sort();
   const sem = new Map<string, ReturnType<typeof nuevaNoche>>();
   for (const [fecha, e] of noche) {
+    if (e.cadetes === 0) continue;
     const s = semanaDe(fecha);
     const a = sem.get(s) || nuevaNoche();
-    a.pedidosEnvio += e.pedidosEnvio; a.envios += e.envios; a.cadetes += e.cadetes; a.viajes += e.viajes;
-    a.pagos += e.pagos; a.empresa += e.empresa; a.alMinimo += e.alMinimo;
+    for (const k of Object.keys(a) as (keyof Acum)[]) a[k] += e[k];
     sem.set(s, a);
   }
   const semanas: DeliverySemana[] = [...sem.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1)).map(([semana, a]) => ({
@@ -337,6 +359,9 @@ export async function construirDelivery(
     pagosCadetes: r0(a.pagos),
     costoEmpresaCadeteria: r0(a.empresa),
     resultado: r0(a.envios - a.pagos - a.empresa),
+    margenEnvios: r0(a.envios - a.valorViajes),
+    complementoBaseMinima: r0(a.complemento),
+    unidadesCobradasEnPedix: a.pedidosSinUnidad === 0 ? a.unidadesCobradas : null,
     costoPorViaje: a.viajes > 0 ? r0((a.pagos + a.empresa) / a.viajes) : null,
     envioPromedioCobrado: a.pedidosEnvio > 0 ? r0(a.envios / a.pedidosEnvio) : null,
     viajesPorCadeteNoche: a.cadetes > 0 ? r1(a.viajes / a.cadetes) : null,
@@ -356,6 +381,9 @@ export async function construirDelivery(
       viajesPorCadetePromedio: sum('cadetes') > 0 ? r1(sum('viajes') / sum('cadetes')) : null,
       pctJornadasAlMinimo: sum('cadetes') > 0 ? pct(sum('alMinimo'), sum('cadetes')) : null,
       resultadoPromedio: n ? r0((sum('envios') - sum('pagos') - sum('empresa')) / n) : 0,
+      margenEnviosPromedio: n ? r0((sum('envios') - sum('valorViajes')) / n) : 0,
+      complementoBaseMinimaPromedio: n ? r0(sum('complemento') / n) : 0,
+      costoEmpresaPromedio: n ? r0(sum('empresa') / n) : 0,
     };
   });
 
@@ -363,14 +391,17 @@ export async function construirDelivery(
   const totPedEnvio = semanas.reduce((a, x) => a + x.pedidosConEnvio, 0);
   const viajesPorPedidoConEnvio = totPedEnvio > 0 && totViajes > 0 ? r1(totViajes / totPedEnvio) : null;
   return {
+    nochesConEnviosSinCadetesCargados: nochesSinCadetes.length
+      ? { cantidad: nochesSinCadetes.length, desde: nochesSinCadetes[0], hasta: nochesSinCadetes[nochesSinCadetes.length - 1] }
+      : null,
     viajesPorPedidoConEnvio,
     nota:
-      'Los "viajes" son los que se cargan a mano por cadete y por noche al cerrar la jornada (base del pago). ' +
-      (viajesPorPedidoConEnvio !== null && viajesPorPedidoConEnvio > 1.2
-        ? `Hay ~${viajesPorPedidoConEnvio} viajes cargados por cada pedido con envío de Pedix: NO asumas que 1 viaje = 1 pedido ` +
-          '(puede contar ida y vuelta, pedidos por fuera de Pedix u otros mandados). Si la conclusión depende de eso, preguntale a Lucas qué cuenta como viaje. '
-        : '') +
-      'jornadasPagadasAlMinimo = jornadas donde viajes × valor por viaje no llegó a la base mínima (se pagó la base).',
+      'Un "viaje" es una UNIDAD de distancia, no un pedido: un envío simple = 1 viaje, doble = 2, etc. (por eso hay más viajes que pedidos). ' +
+      'El cadete cobra max(base mínima, viajes × valor por viaje); el cliente paga en Pedix unidades × valor + un margen chico (ej. 2.500 un simple, 4.500 un doble, con viaje a 2.000). ' +
+      'Que el cadete SUPERE la base es bueno: su pago sale de lo que pagan los clientes. La pérdida de delivery se descompone EXACTO en: ' +
+      'resultado = margenEnvios (envíos cobrados − viajes × valor) − complementoBaseMinima (lo que se paga de más para llegar a la base en jornadas flojas) − costoEmpresaCadeteria. ' +
+      'La palanca principal es complementoBaseMinima: cuántos cadetes se ponen por noche frente a la demanda de ese día. ' +
+      'unidadesCobradasEnPedix (deducidas del cargo de envío) vs. viajes cargados sirve para detectar viajes que no se cobraron.',
     configuracionActual: {
       baseMinima,
       valorViaje,

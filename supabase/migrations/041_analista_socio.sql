@@ -62,7 +62,7 @@ CANALES: WhatsApp Business con una lista de más de 2.000 clientes. Los envíos 
 
 PUBLICIDAD: campaña de Meta Ads de mensajes a WhatsApp, presupuesto de ~USD 150 por fin de semana. Se prende viernes, sábado y domingo a las 19:00 y se apaga a las 22:30 (la misma franja en la que entran los pedidos). Conjuntos de audiencia fría y cálida.
 
-DELIVERY: cadetes por jornada; cada cadete cobra el mayor entre una base mínima por noche y un valor por viaje, más un costo fijo por cadete a la empresa de cadetería (valores en Configuración). El cliente paga el envío según la distancia.
+DELIVERY: el "viaje" es una unidad de distancia: un envío simple vale 1 viaje ($2.000 para el cadete) y en Pedix lo cobramos $2.500; uno doble vale 2 viajes ($4.000) y lo cobramos $4.500; y así sucesivamente (los $500 son un pequeño margen). Cada cadete cobra el mayor entre una base mínima por noche ($21.000) y viajes × $2.000, más $1.500 por cadete a la empresa de cadetería. Me conviene que los cadetes pasen la base: significa que no pierdo plata y los estoy pagando con lo que pagan los clientes. Lo que me hace perder es pagar la base a cadetes que hicieron pocos viajes.
 
 PROYECTO EN CURSO — ROYAL FAMILY: comunidad de WhatsApp para dejar de depender de los envíos masivos. Se invita una última vez a toda la lista. Beneficios: descuentos mensuales, promos exclusivas para la comunidad, sorteos mensuales y votar la "hamburguesa del mes", que se hace especial para la Royal Family.
 

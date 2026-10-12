@@ -251,7 +251,10 @@ export type DeliverySemana = {
   viajes: number;
   pagosCadetes: number;
   costoEmpresaCadeteria: number;
-  resultado: number;              // envíos cobrados − pagos − costo empresa
+  resultado: number;              // envíos cobrados − pagos − costo empresa = margenEnvios − complementoBaseMinima − costoEmpresaCadeteria
+  margenEnvios: number;           // envíos cobrados − viajes × valor por viaje (lo que el cliente paga por encima del costo del viaje)
+  complementoBaseMinima: number;  // lo pagado de más para llegar a la base mínima en jornadas con pocos viajes
+  unidadesCobradasEnPedix: number | null; // viajes deducidos del cargo de envío (null si algún monto no encaja en la tarifa)
   costoPorViaje: number | null;   // (pagos + costo empresa) / viajes
   envioPromedioCobrado: number | null;
   viajesPorCadeteNoche: number | null;
@@ -265,9 +268,13 @@ export type DeliveryDia = {
   viajesPorCadetePromedio: number | null;
   pctJornadasAlMinimo: number | null;
   resultadoPromedio: number;
+  margenEnviosPromedio: number;
+  complementoBaseMinimaPromedio: number;
+  costoEmpresaPromedio: number;
 };
 export type DeliveryResumen = {
   configuracionActual: { baseMinima: number | null; valorViaje: number | null; costoEmpresaPorCadete: number | null; viajesParaSuperarMinimo: number | null };
+  nochesConEnviosSinCadetesCargados: { cantidad: number; desde: string; hasta: string } | null; // excluidas de las series
   viajesPorPedidoConEnvio: number | null; // viajes cargados / pedidos con envío en la ventana
   nota: string;
   semanas: DeliverySemana[];
