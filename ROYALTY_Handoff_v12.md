@@ -1,11 +1,37 @@
-# ROYALTY — Handoff Técnico Completo v11
-## Fecha: 7 de octubre de 2026
+# ROYALTY — Handoff Técnico Completo v12
+## Fecha: 12 de octubre de 2026
 
-Sos el nuevo Claude (o Claude Code) que continúa el desarrollo de ROYALTY, el sistema de gestión de Royalty Burgers (Rosario, Argentina). Este documento es la fuente de verdad del proyecto y **reemplaza a ROYALTY_Handoff_v10.md** (renombrado). No tenés acceso al chat anterior — toda la información que necesitás está acá.
+Sos el nuevo Claude (o Claude Code) que continúa el desarrollo de ROYALTY, el sistema de gestión de Royalty Burgers (Rosario, Argentina). Este documento es la fuente de verdad del proyecto y **reemplaza a ROYALTY_Handoff_v11.md** (renombrado). No tenés acceso al chat anterior — toda la información que necesitás está acá.
 
 ---
 
-## 0. CAMBIOS SESIÓN 6–7 OCT 2026 (LEER PRIMERO)
+## 0. RESUMEN SESIÓN 11–12 OCT 2026 (LEER PRIMERO)
+
+**Qué se hizo:** el Analista del Laboratorio pasó a ser **"Tu socio"**, un asesor con quien Lucas debate decisiones con todo el contexto del negocio. Detalle técnico completo en la sección 0.2. Commits `9c0d35f`, `1ead8b4`, `ea5fe77` (todos deployados y verificados en `www.royaltyburgers.club`).
+
+**Estado al cierre de la sesión:**
+- ✅ Migración **041** APLICADA (11-oct, vía Supabase CLI — ver sección 18 "Aplicar migraciones") y verificada.
+- ✅ Backfill de `tipo_entrega` / `medio_pago` / `cupon` / `descuento` / `origen_venta`: **1723/1723 pedidos**, 0 errores.
+- ✅ Probado con dos charlas reales (mismo código del route, datos de producción, Opus 5.5): una sobre mover la campaña de Meta (usó `antes_y_despues`, ~88 s, ~USD 0,33) y otra sobre margen por hamburguesa y suba de la carne (usó `simular_escenario` dos veces, ~69 s, ~USD 0,49). No inventó números y no escribió en la memoria cuando no había decisión.
+- ⚠️ **No probado aún con la sesión real de Lucas en el navegador** (la UI nueva compila y se deployó, pero nadie la clickeó). Primer paso sugerido de la próxima sesión si hay acceso al Chrome de Lucas.
+
+**Pendientes de Lucas (datos, no código) — el socio está instruido para preguntarlos:**
+1. Revisar/corregir la **ficha del negocio** (Laboratorio → Analista → "Lo que tu socio sabe de Royalty"). Se sembró con lo que contó en la sesión.
+2. **Gastos no cargados:** en `gastos_operativos` solo hay publicidad + sueldos (+1 "otros"). Sin alquiler, servicios ni impuestos → si existen, el beneficio neto del sistema está sobreestimado.
+3. **Lata de coca:** precio de carta $3.000 en `productos_precios`, pero en Pedix se cobra $3.500.
+4. **Semana del 28-ago:** publicidad importada parcial de Meta ($17.978, USD 11,25) + carga manual ($346.191) el 30-ago. Reimportar el CSV de esa semana (procedimiento 15.5). La del 21-ago no tiene detalle en `meta_ads_detalle`.
+5. **¿Había anuncios en mayo?** El sistema marca $0 de publicidad en mayo, que fueron las semanas con más clientes nuevos. Si había y no se cargaron, cargarlo como evento.
+6. Cuando decida el experimento de campaña / Royal Family, contárselo al socio en una charla (lo anota con `recordar` y después lo mide con `antes_y_despues`). Sugerencia del socio: cupón propio de la Royal Family en Pedix (nunca se usó un cupón → señal limpia).
+
+**Gotchas nuevos de esta sesión (no reincidir):**
+- **`configuracion` es legible por empleados** (policy `empleado_read`, migración 002). Nada estratégico, de presupuesto ni de memoria del asesor va ahí → `analista_conocimiento` (admin-only).
+- **"Viaje" de cadete = unidad de distancia, NO un pedido** (simple = 1, doble = 2…). Hay ~1,4 viajes por pedido con envío y está bien.
+- **Supabase: nunca `supabase db push`** — la tabla de historial de migraciones remota está vacía (todo se aplicó por SQL editor), así que intentaría re-ejecutar 001–041. Usar `supabase db query -f` dentro de `BEGIN/COMMIT` (sección 18).
+- **El Analista usa dos ventanas distintas:** la serie financiera (`historia.semanas`) solo con semanas CERRADAS; los bloques de clientes/operación (`recompra`, `horario`, `delivery`, `entregaPago`) llegan hasta el último finde importado. No mezclarlas.
+
+---
+
+## 0.A CAMBIOS SESIÓN 6–7 OCT 2026
 
 **Fix mayor de confiabilidad de ventas: captura de "extras con precio" de Pedix.**
 
@@ -28,7 +54,7 @@ Qué se cambió (deployado a `main`, commit `869dd20`):
 **Relevamiento amplio + correcciones (misma sesión):** se auditó toda la app y se aplicaron fixes de 3 tipos (deployados a `main`, salvo la migración que requiere acción manual):
 
 🔴 **Seguridad — fuga de pesos a empleados por RLS.** El principio 2.10 se cumplía en la UI/server-actions pero NO en la capa RLS: varias tablas con pesos tenían SELECT para empleado/`USING(true)`, y la RPC `obtener_salud_clientes` era `SECURITY DEFINER` + GRANT a todos los autenticados. Un empleado (hay 1 real) podía leerlos directo por la API REST. Fixes:
-  - **`supabase/migrations/039_rls_fuga_pesos_empleado.sql` (NUEVO) — ⚠️ PENDIENTE DE APLICAR en el SQL editor de Supabase.** Pone admin-only el SELECT de `pedidos`, `pedidos_lineas`, `periodos_productos`, `periodos_gastos`, `cadetes_jornadas`, `clientes`, y revoca la RPC de salud a empleados (la deja para `service_role`). Hasta aplicarla, la fuga a nivel API sigue abierta aunque el código ya esté deployado.
+  - **`supabase/migrations/039_rls_fuga_pesos_empleado.sql` — ✅ APLICADA (7-oct).** Pone admin-only el SELECT de `pedidos`, `pedidos_lineas`, `periodos_productos`, `periodos_gastos`, `cadetes_jornadas`, `clientes`, y revoca la RPC de salud a empleados (la deja para `service_role`).
   - Código (ya deployado): `exigirAdmin()`/chequeo de rol en `registrarConsumo`/`obtenerConsumosPeriodo`/`eliminarConsumo` (consumo-interno), `obtenerSaludClientes` (dashboard — ahora llama la RPC con admin client), `cerrarPeriodo` (evolucion), `generarInformeMensual` (informe). Middleware: se agregaron `/consumo-interno`, `/auditoria`, `/evolucion` a `adminRoutes`.
 
 🟠 **Correctness:** parser de Meta Ads con match EXACTO primero (evita enganchar columnas derivadas tipo "Coste por resultados") + **guard de moneda** (si la columna de gasto no es USD, ej. "(ARS)", tira error en vez de multiplicar por el tipo de cambio y cargar ~1000× de más). Categoría "Cadetería" sacada del selector de gastos y excluida de `calcularKpis` (evita doble conteo con `resultadoDelivery`). Guard `factor_conversion > 0` en `importar-core` y consumo (evita costo Infinity). Fechas server-side de `gastos/actions.ts` (`obtenerPeriodoActual`/`buildPeriodoInfo`) e `generarInformeMensual` ahora usan hora Argentina (`Intl`), no UTC.
@@ -55,7 +81,7 @@ Qué se cambió (deployado a `main`, commit `869dd20`):
 **Feature nueva: el Laboratorio ahora tiene un analista de negocio con chat.** El tab "Decisiones" (el loop viejo de recomendaciones→decisión→resultado) se preservó intacto; se agregó el tab "Analista".
 - **Motor determinístico** `src/lib/analisis/` (`analisis-negocio.ts` + `tipos.ts`): `construirAnalisisCompleto(admin, scope, generadoEn)` arma TODO el análisis de un período (financiero, ranking de productos, por día Vie/Sáb/Dom, promos vs no-promo, afinidad repetidores vs nuevos, inversión con Meta Ads por conjunto, clientes, equipo, merma, tendencia). Soporta scope `semana` / `mes` / `comparacion`. La IA NUNCA inventa números: todo sale de acá. Es auto-contenido (recibe el client) → testeable aislado.
 - **Migración 040** (APLICADA): `laboratorio_conversaciones` (congela el `contexto` jsonb por conversación) + `laboratorio_mensajes`. Admin-only (`get_my_rol()='admin'`).
-- **Server/stream**: `laboratorio/analista-actions.ts` (iniciar/listar/obtener/archivar/eliminar conversación + `guardarComoDecision` que conecta con `decisiones_laboratorio`). Chat por **route handler** `laboratorio/chat/route.ts` (streaming de texto + loop de tool-use). Primer turno = INFORME con **Opus** (`claude-opus-4-8`, closed-book); chat = **Sonnet** (`claude-sonnet-5`) con herramientas; el contexto va como bloque con `cache_control` (prompt caching) en `src/lib/laboratorio/prompts.ts`.
+- **Server/stream**: `laboratorio/analista-actions.ts` (iniciar/listar/obtener/archivar/eliminar conversación + `guardarComoDecision` que conecta con `decisiones_laboratorio`). Chat por **route handler** `laboratorio/chat/route.ts` (streaming de texto + loop de tool-use). Primer turno = INFORME con **Opus** (`claude-opus-4-8`, closed-book); chat = **Sonnet** (`claude-sonnet-5`) con herramientas *(superado el 11-oct: hoy todo usa `claude-opus-5-5`, ver 0.2)*; el contexto va como bloque con `cache_control` (prompt caching) en `src/lib/laboratorio/prompts.ts`.
 - **Herramientas de drill-down (fase 3, HECHA)** — `src/lib/laboratorio/tools.ts`: 4 herramientas de solo-lectura que el chat invoca on-demand (agéntico, tope 5 rondas en el route): `comparar_periodos`, `detalle_dia`, `detalle_producto` (match exacto preferido), `listar_clientes_segmento` (alto_valor_en_riesgo / nuevos_en_riesgo / top_repetidores, con teléfono). Reusan el motor de análisis → números reales, la IA no inventa. En el chat se ve "🔎 Consultando datos (tool)…" mientras ejecuta.
 - **UI**: `page.tsx` (tabs), `AnalistaTab.tsx` (selector de alcance + lista de conversaciones + datos duros + chat), `DecisionesTab.tsx` (el loop viejo movido acá), `Markdown.tsx` (renderer propio: encabezados/negrita/listas/**tablas**).
 - Probado end-to-end en producción (fases 1, 2 y 3): informe de Opus + repreguntas de Sonnet + invocación de herramientas (ej. `comparar_periodos` armó una tabla 2 Oct vs 11 Sep), citando números reales y respetando la regla caliente/fría. Costo: con caching, cada repregunta sale centavos. Commits: `fa40b7a` (fases 1-2), `8a3cca9` (fase 3).
@@ -66,15 +92,15 @@ Qué se cambió (deployado a `main`, commit `869dd20`):
 
 ---
 
-## 0.2 EL ANALISTA PASA A SER "TU SOCIO" (sesión 11-oct-2026)
+## 0.2 EL ANALISTA PASA A SER "TU SOCIO" (sesión 11–12 oct 2026) — DETALLE TÉCNICO
 
-Intención de Lucas (textual en espíritu): no tiene con quién hablar de los resultados; quiere un socio con todo el contexto del negocio para debatir decisiones (promos, cadetería, si la gente vuelve, dónde poner la publicidad, la comunidad "Royal Family"). Cambios (commit de esta sesión):
+Intención de Lucas: no tiene con quién hablar de los resultados del negocio; quiere un socio que tenga todo el contexto (cómo funciona Royalty, ventas, promos, cadetería, si la gente vuelve, publicidad, la comunidad "Royal Family") para debatir decisiones y pensar optimizaciones de rentabilidad. Pidió implementar todo "y más si lo ves necesario". Cambios:
 
-- **Migración 041 (`041_analista_socio.sql`)** — ⚠️ aplicar en el SQL editor ANTES de deployar el código (el import inserta columnas nuevas y el chat usa la tabla nueva):
+- **Migración 041 (`041_analista_socio.sql`)** — ✅ APLICADA el 11-oct (vía `supabase db query` en transacción). Si se reconstruye la base desde cero, va ANTES del código (el import inserta columnas nuevas y el chat usa la tabla nueva):
   - `pedidos`: `tipo_entrega`, `medio_pago`, `cupon`, `descuento` (suma positiva de descuentos Pedix, informativa), `origen_venta`. Nullable, descriptivas (no congeladas). El parser (`pedix-parser.ts`) ya las lee ("Forma de entrega", "Método de pago", "Cupón", "Descuento *", "Origen venta") e `importar-core.ts` las guarda.
   - Tabla **`analista_conocimiento`** (admin-only): `tipo` ficha/evento/nota. Reemplaza `configuracion.negocio_eventos` (los migra y borra esa clave) porque **`configuracion` tiene policy `empleado_read`** → estrategia/presupuesto no pueden vivir ahí (principio 2.10). Siembra una ficha inicial con lo que contó Lucas.
   - CHECK de `laboratorio_conversaciones.scope_tipo` admite `negocio` y `charla` (se terminó el hack de guardar 'negocio' como 'semana').
-- **Backfill** de las columnas nuevas desde los 42 Excel de ~/Downloads: script `backfill-041.js` (parser real compilado, solo `UPDATE` de columnas nuevas donde `tipo_entrega IS NULL`). Dry-run: 1723/1723 pedidos con dato; 93% delivery; nunca se usó un cupón.
+- **Backfill** ✅ HECHO de las columnas nuevas desde los 42 Excel de ~/Downloads (script de la sesión: parser real compilado con `tsc`, solo `UPDATE` de columnas nuevas donde `tipo_entrega IS NULL`, no toca montos). Resultado: 1723/1723 pedidos, 0 errores. 93% delivery (1609) / 7% retiro (114); 61% transferencia / 39% efectivo; nunca se usó un cupón; descuentos totales $2.256.000.
 - **Motor** — `src/lib/analisis/clientes-operacion.ts` (nuevo) agrega a `historia`: `recompra` (clientes únicos, % una sola compra, distribución, días 1ra→2da compra, recencia, serie semanal nuevos vs. vuelven con costo de publi por cliente nuevo, **cohortes** a 30/60 días con flags de madurez e "inflada"), `horario` (día×hora con % de primera compra), `delivery` (cadetería por semana y por día: viajes, costo por viaje, jornadas pagadas al mínimo, tramos de envío) y `entregaPago` (delivery/retiro, transferencia/efectivo, descuentos, cupones). Ventana de 26 semanas; en negocio/charla los bloques de clientes llegan al último finde importado aunque no esté cerrado (`ventanaClientesYOperacion`). Una sola lectura liviana de pedidos reemplaza `primerPedidoPorCliente`.
   - ⚠️ Cohortes: las primeras 4 semanas (abr-may) están "infladas" (clientes previos al sistema cuentan como nuevos). Decisión "cohortes fuera de scope" (sección 11) **revertida por pedido de Lucas** el 11-oct.
   - Cadetería (confirmado por Lucas): un "viaje" es una UNIDAD de distancia (simple = 1 = $2.000 al cadete, cobrado $2.500 en Pedix; doble = 2 = $4.000, cobrado $4.500; tarifa vieja sin margen 2.000/4.000/6.000). Por eso hay ~1,4 viajes por pedido. Que el cadete supere la base es bueno (lo pagan los clientes). El motor descompone EXACTO: `resultado = margenEnvios − complementoBaseMinima − costoEmpresa`. Solo cuenta noches con jornadas cargadas (hasta jul hay 17 noches con envíos y sin cadetes → excluidas). Al 4-oct, 18 semanas: −$2.183.500 = margen −$482k (viajes no cobrados + tarifa vieja) − complemento $1.340k (61%) − empresa $361,5k.
@@ -97,10 +123,11 @@ Intención de Lucas (textual en espíritu): no tiene con quién hablar de los re
 **Objetivo del sistema:** Medir ventas, costos, beneficio y margen semana a semana, con datos financieramente auditables e inmutables hacia el pasado. Responde: ¿qué pasó?, ¿por qué pasó?, ¿qué tan saludable está el negocio?, ¿estoy construyendo una base de clientes fieles?, ¿el equipo está alineado con el objetivo de margen?, ¿hay merma de stock?, ¿qué debería hacer distinto la semana que viene, y funcionó lo que decidí la vez pasada?, ¿qué conjunto de anuncios de Meta Ads debería escalar o pausar esta semana según el tipo de audiencia?, y ahora también: ¿a qué clientes le hablo esta semana por WhatsApp según cuánto hace que no compran, y cómo le planteo a una IA externa la realidad completa de un mes para debatir cómo mejorar los resultados?
 
 **Estado del deploy: ✅ COMPLETO.**
-- Repo privado en GitHub: `https://github.com/radycal3/royalty`.
+- Repo en GitHub: `https://github.com/radycal3/royalty` — **PÚBLICO a propósito** (Vercel Hobby bloquea deploys de repos privados con colaboradores; ver 0.1). No volverlo privado sin pasar Vercel a Pro.
 - Vercel conectado al repo, auto-deploy en cada push a `main`.
 - Dominio `royaltyburgers.club` (comprado en Porkbun) conectado y con SSL activo. El apex redirige (308) a `www.royaltyburgers.club`, que es el dominio canónico.
-- Variables de entorno en Vercel: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`.
+- Variables de entorno en Vercel: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SUPABASE_ANON_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `ANTHROPIC_API_KEY`. Las mismas están en `.env.local` (bajadas con Vercel CLI, que está instalado y linkeado: `vercel ls` muestra los deploys).
+- **Supabase CLI con sesión (NUEVO 11-oct):** Lucas hizo `npx supabase login` (navegador; Claude nunca vio el token). Con eso Claude Code puede aplicar migraciones con `npx supabase db query --linked --project-ref xdnpfswnxmpnzztjnsme -f archivo.sql`. El proyecto de la app es **Royalty** (`xdnpfswnxmpnzztjnsme`); la misma cuenta tiene otro proyecto ("Vive de Servir") que NO se toca. Ver sección 18.
 - Supabase Auth → Site URL y Redirect URLs apuntan a `https://www.royaltyburgers.club` (manteniendo `http://localhost:3000/**` para desarrollo local).
 - Identidad de Git de Lucas ya configurada globalmente (`user.name "Lucas Alaniz"`, `user.email "bsediciones@gmail.com"`).
 - **Push a GitHub desde Claude Code (NUEVO esta sesión):** `gh` CLI instalado (`brew install gh`) y autenticado como `radycal3` (`gh auth login`, vía navegador, dispositivo — lo hizo Lucas, Claude nunca vio el token). Luego `gh auth setup-git` engancha `gh` como credential helper de git. Con esto, `git push origin main` funciona directo desde Claude Code sin pedirle nada a Lucas — esto persiste entre sesiones (no hace falta repetirlo). Si en el futuro `git push` falla con "could not read Username" o "Invalid username or token", correr `gh auth status` para diagnosticar antes de asumir que hay que rehacer el login.
@@ -254,9 +281,18 @@ const requestIdRef = useRef(0);
 // aplicadas NUNCA se editan; si hace falta corregir algo, se agrega una
 // migración nueva.
 
-// Anthropic SDK: usar client.messages.parse() con
-// output_config: { format: zodOutputFormat(schema) } y leer
-// response.parsed_output — no parsear JSON a mano. Modelo: 'claude-opus-4-8'.
+// Anthropic SDK (@anthropic-ai/sdk 0.105) — DOS patrones vigentes:
+// 1) Salida estructurada (loop viejo "Generar recomendaciones", laboratorio/actions.ts):
+//    client.messages.parse() + output_config: { format: zodOutputFormat(schema) } y leer
+//    response.parsed_output — no parsear JSON a mano. Modelo: 'claude-opus-4-8' (no migrado).
+// 2) Chat agéntico del Analista (laboratorio/chat/route.ts): anthropic.beta.messages.stream()
+//    con model 'claude-opus-5-5' (constantes en src/lib/laboratorio/prompts.ts),
+//    output_config: { effort }, tools SIEMPRE presentes (tool_choice 'none' cuando no se usan,
+//    para no romper el prefijo de caché), betas ['server-side-fallback-2026-06-01'] +
+//    fallbacks [{ model: 'claude-opus-4-8' }]. En el loop de tools se agrega finalMsg.content
+//    COMPLETO (con bloques de thinking) sin editarlo, y todos los tool_result juntos en un
+//    solo mensaje user. Opus 5.5: el thinking no se puede desactivar (se regula con effort) y
+//    tool_choice 'any'/'tool' da 400. Antes de tocar este código, cargar el skill claude-api.
 
 // Parsers de CSV sin dependencias: buscar columnas por nombre con múltiples
 // candidatos en minúsculas (idioma/exportación variable), nunca por posición fija.
@@ -330,7 +366,7 @@ const requestIdRef = useRef(0);
 
 ## 4. MIGRACIONES SQL — ESTADO COMPLETO
 
-**Sesión 6-7 oct 2026: se aplicaron las migraciones 039 y 040** (ver sección 0 y 0.1). La 039 cierra fugas de RLS (pesos/PII admin-only + revoca la RPC de salud a empleados); la 040 crea las tablas del Analista (`laboratorio_conversaciones`, `laboratorio_mensajes`). Ambas aplicadas y verificadas. La última migración aplicada es la **040**.
+**La última migración aplicada es la 041** (11-oct-2026). Desde esa sesión las migraciones las puede aplicar Claude Code con el Supabase CLI (procedimiento en la sección 18); antes se aplicaban a mano en el SQL editor. Por eso la tabla de historial de migraciones del CLI está vacía — **nunca usar `supabase db push`**.
 
 | # | Archivo | Qué hace | Estado |
 |---|---------|----------|--------|
@@ -363,12 +399,15 @@ const requestIdRef = useRef(0);
 | 036 | `036_meta_ads_detalle.sql` | Tabla `meta_ads_detalle` (detalle por anuncio/conjunto, con `tipo_audiencia`). ON DELETE CASCADE desde `meta_ads_importaciones`. Admin-only | ✅ Aplicado |
 | 037 | `037_meta_ads_detalle_fix_tipos.sql` | ALTER TABLE `meta_ads_detalle`: cambia `costo_por_resultado_usd` y `ctr_enlace` de `NUMERIC(n,m)` a `NUMERIC` sin restricción — fix de "numeric field overflow" con valores de muchos decimales del CSV real | ✅ Aplicado |
 | 038 | `038_metricas_detalle.sql` | Tablas `metricas_faltantes_detalle` (producto + cantidad + precio de venta congelado, ON DELETE CASCADE desde `metricas_equipo_semana`) y `metricas_quejas_detalle` (texto libre). RLS admin-full + empleado-SELECT. | ✅ Aplicado |
+| 039 | `039_rls_fuga_pesos_empleado.sql` | SELECT admin-only en `pedidos`, `pedidos_lineas`, `periodos_productos`, `periodos_gastos`, `cadetes_jornadas`, `clientes`; revoca la RPC `obtener_salud_clientes` a empleados (queda para `service_role`) | ✅ Aplicado (7-oct) |
+| 040 | `040_laboratorio_analista.sql` | Tablas `laboratorio_conversaciones` (contexto jsonb congelado por conversación) y `laboratorio_mensajes`. Admin-only | ✅ Aplicado (7-oct) |
+| 041 | `041_analista_socio.sql` | Columnas `tipo_entrega`, `medio_pago`, `cupon`, `descuento`, `origen_venta` en `pedidos`; tabla admin-only `analista_conocimiento` (ficha/evento/nota) + migra y borra `configuracion.negocio_eventos` + siembra la ficha; CHECK de `scope_tipo` admite `negocio` y `charla` | ✅ Aplicado (11-oct, CLI) |
 
 ---
 
 ## 5. ESQUEMA DE BASE DE DATOS ACTUAL
 
-Sin cambios de esquema esta sesión — ver sección 4. Estructura completa (idéntica a v9):
+Estructura completa. Cambios de las sesiones de octubre: columnas nuevas en `pedidos` (5.3), tablas del Analista (5.16) y el endurecimiento de RLS de la 039 (ver tabla de la sección 4).
 
 ### 5.1 Tablas core
 - **`usuarios`** — id, email, nombre, rol (admin/empleado), activo. RLS con `public.get_my_rol()` SECURITY DEFINER.
@@ -384,7 +423,7 @@ Sin cambios de esquema esta sesión — ver sección 4. Estructura completa (id�
 
 ### 5.3 Importación / Ventas
 - **`importaciones`** — nombre_archivo, hash_archivo (SHA-256), estado ('activa'/'anulada'), importado_por, fecha_desde, fecha_hasta.
-- **`pedidos`** — importacion_id, pedido_pedix_id (UNIQUE), fecha, hora, envio_cobrado, cliente_id (FK nullable), cliente_celular, cliente_nombre, cliente_direccion. `cliente_celular` viene de Pedix en formatos mezclados — ver normalización en sección 8 (Exportar clientes).
+- **`pedidos`** — importacion_id, pedido_pedix_id (UNIQUE), fecha, hora, envio_cobrado, cliente_id (FK nullable), cliente_celular, cliente_nombre, cliente_direccion, y desde la 041: `tipo_entrega` ("Envío a domicilio - Delivery" / "Retiro en persona"), `medio_pago` ("Transferencia" / "Efectivo"), `cupon`, `descuento` (suma positiva de las columnas "Descuento *" de Pedix; informativo, las ventas ya vienen netas), `origen_venta` ("Tienda Pedix"). Las 5 son descriptivas y nullable (NULL = no capturado). `cliente_celular` viene de Pedix en formatos mezclados — ver normalización en sección 8 (Exportar clientes).
 - **`pedidos_lineas`** — pedido_id, producto_id, cantidad, precio_unitario_vendido, costo_unitario_calculado.
 - **`pedidos_lineas_ingredientes`** — congelación de ingredientes por línea.
 
@@ -435,6 +474,12 @@ Sin cambios de esquema esta sesión — ver sección 4. Estructura completa (id�
 ### 5.15 Tablas Fase 0 eliminadas (migración 028)
 `empleados`, `asistencia`, `stock_conteos`, `stock_compras` — dropeadas.
 
+### 5.16 Analista ("Tu socio") — migraciones 040 y 041
+- **`laboratorio_conversaciones`** — id, titulo, scope_tipo (CHECK: semana/mes/comparacion/negocio/charla), scope jsonb, contexto jsonb (el `AnalisisCompleto` CONGELADO al crear), modelo_informe, modelo_chat, archivada, created_by, created_at. Admin-only.
+- **`laboratorio_mensajes`** — conversacion_id (FK CASCADE), orden, rol (user/assistant), contenido (solo texto; los bloques de thinking/tool no se guardan), meta jsonb (`{ modelo, herramientas[] }`). Admin-only.
+- **`analista_conocimiento`** — id, tipo (CHECK: ficha/evento/nota), fecha, texto, origen (CHECK: lucas/asesor), created_at. Índice único parcial: una sola fila `ficha`. Admin-only (`get_my_rol()='admin'`). Lo leen el route del chat (ficha + memoria en cada turno) y el motor (eventos al congelar el contexto). Helpers en `src/lib/laboratorio/conocimiento.ts`.
+- `configuracion.negocio_eventos` **ya no existe** (migrado a esta tabla).
+
 **Nota (sesión 31 jul):** las dos features de esa sesión (Informe mensual, Exportar clientes) **no agregaron tablas** — leen de `pedidos`/`periodos`/etc. existentes y no persisten nada nuevo en base.
 
 **Nota (sesión 4 ago, esta):** las tres features nuevas (Reabrir semana, Duplicar producto, Eliminar producto) tampoco agregaron tablas ni columnas — son solo UI + server actions nuevas sobre `periodos`, `productos`, `productos_precios` y `recetas` ya existentes.
@@ -457,6 +502,10 @@ Sin cambios de esquema esta sesión — ver sección 4. Estructura completa (id�
 | `margen_objetivo_minimo` | 50 | Límite inferior zona Objetivo en gráfico de margen (%) |
 | `margen_excelente_minimo` | 60 | Límite inferior zona Excelente (%) |
 | `cliente_ventana_activo_dias` | 21 | Días desde última compra para considerar cliente activo |
+
+**Valores reales en producción (11-oct, difieren de los defaults de arriba):** `alerta_margen_minimo` = 5, `margen_objetivo_minimo` = 15, `margen_excelente_minimo` = 30. También existen `meta_nombre`, `meta_descripcion`, `meta_hamburguesas` (= 350), `producto_consumo_empleado` y `producto_consumo_cadete` (ids de producto). Consultar la tabla antes de asumir un valor.
+
+**⚠️ `configuracion` es legible por empleados** (policy `empleado_read` de la migración 002). No guardar acá nada estratégico, de presupuesto ni de montos que el empleado no deba ver (principio 2.10) — por eso los eventos/ficha/memoria del Analista viven en `analista_conocimiento`.
 
 Notas: las metas de equipo viven en `metas_equipo`, no acá. El tipo de cambio de Meta Ads se ingresa a mano por importación — no es config global porque cambia cada semana. Los umbrales de segmentación de `/clientes/exportar` (14 y 45 días) están **hardcodeados en el código**, no en esta tabla — quedó pendiente evaluar si conviene moverlos acá (ver sección 16).
 
@@ -554,6 +603,16 @@ diasDesdeUltimaCompra = hoyArgentina − MAX(pedidos.fecha) agrupado por celular
 ---
 
 ## 8. MÓDULOS — ESTADO ACTUAL
+
+### ✅ Laboratorio → "Tu socio" (Analista) (sesiones 7-oct y 11–12 oct)
+Ruta `/laboratorio`, tab "Analista" (el tab "Decisiones" es el loop viejo, intacto). Detalle técnico en la sección 0.2. Desde la UI (`AnalistaTab.tsx`):
+- **"Charlá con tu socio"** (acción principal): Lucas escribe una idea/duda → se crea una conversación `charla` con el contexto congelado y responde directo (sin informe). Prompt `CHARLA_INSTRUCCION`: datos a favor/en contra, qué no se puede saber, riesgos, cómo probarlo como experimento, opinión honesta.
+- **"Lo que tu socio sabe de Royalty"**: ficha del negocio (textarea), memoria (notas; el asesor anota solo con `recordar`) y eventos del mundo real. Todo en `analista_conocimiento`.
+- **"Diagnosticar mi negocio"** (scope `negocio`, informe Opus con `DIAGNOSTICO_ESTRATEGICO`) y **análisis de un período** (semana / mes / comparar, `INFORME_INSTRUCCION`).
+- Por conversación: "Datos duros" (última semana cerrada + resumen de recompra), chat con streaming, "+ Guardar como decisión" (→ `decisiones_laboratorio`).
+- **Qué sabe** (contexto, `construirAnalisisCompleto`): P&L del período, productos, días, promos, repetidores vs nuevos, Meta Ads por conjunto; `historia` (26 semanas: serie financiera de semanas cerradas con gastos por categoría, promos, publicidad fría/cálida, decisiones, recompra y cohortes, horario, delivery/cadetería descompuesto, entrega/pago/cupones); `catalogo` (precios, recetas, costos y márgenes teóricos de hoy); eventos. Ficha + memoria se leen frescas en cada turno.
+- **Herramientas** (`tools.ts`): `comparar_periodos`, `detalle_dia`, `detalle_producto`, `listar_clientes_segmento` (incl. `una_compra_recientes`), `antes_y_despues`, `adquisicion_semana`, `simular_escenario`, `detalle_gastos_semana`, `recordar` (única que escribe).
+- **Qué NO sabe:** merma (Lucas no usa esa función; excluida a pedido), métricas de equipo (casi sin datos: 1 semana), gastos que no se cargan (alquiler/servicios/impuestos), la semana en curso para los números de plata (solo semanas cerradas), y lo que Lucas no puso en la ficha ni le contó.
 
 ### ✅ Reabrir semana cerrada (NUEVO esta sesión — 4 ago)
 Objetivo: Lucas se confundía a veces al cerrar una semana y no encontraba forma de corregirla — en realidad ya existía `eliminarCierre()` (sección 15.3) pero vivía escondido como un link chiquito dentro de la tabla de Evolución.
@@ -676,9 +735,14 @@ src/
       auditoria/
         actions.ts
       laboratorio/
-        actions.ts               ← (sesión 31 jul) construirContextoKpis() (privada, duplicada)
-                                    reemplazada por import de construirContextoSemana() compartida
-        page.tsx
+        actions.ts               ← loop viejo "Generar recomendaciones" (Opus 4.8, messages.parse)
+        page.tsx                 ← tabs Analista / Decisiones
+        AnalistaTab.tsx          ← charla, ficha/memoria/eventos, diagnóstico, período, chat
+        DecisionesTab.tsx        ← el loop viejo de decisiones
+        Markdown.tsx             ← renderer propio (títulos, negrita, listas, tablas)
+        analista-actions.ts      ← iniciar/listar/obtener conversación, guardarComoDecision,
+                                    obtenerConocimiento, guardarFicha, notas y eventos
+        chat/route.ts            ← streaming + loop de tools (Opus 5.5, fallback, maxDuration 300)
     (empleado)/
       layout.tsx
       panel/
@@ -687,6 +751,17 @@ src/
         stock/
           page.tsx
   lib/
+    analisis/                    ← motor determinístico del Analista
+      analisis-negocio.ts         ← construirAnalisisCompleto(), historia (serie, gastos, promos, publi)
+      clientes-operacion.ts       ← recompra/cohortes, horario, delivery, entrega/pago, ventanas
+      catalogo.ts                 ← catálogo vigente + simularEscenario()
+      tipos.ts                    ← todos los tipos del contexto
+    laboratorio/
+      prompts.ts                  ← modelos + prompts (sistema, informe, diagnóstico, charla, chat)
+      tools.ts                    ← definiciones y ejecutores de las herramientas
+      conocimiento.ts             ← ficha/memoria/eventos (analista_conocimiento) + hoyArgentina()
+    import/
+      importar-core.ts            ← núcleo de importación (server action + backfills)
     reportes/                    ← (sesión 31 jul)
       contexto-semana.ts          ← construirContextoSemana() — compartido por Laboratorio e Informe mensual
       informe-mensual.ts          ← decomponerMesEnSemanas(), formatearInformeMensual()
@@ -695,7 +770,7 @@ src/
     supabase/
       server.ts, admin.ts, client.ts
     utils/
-      pedix-parser.ts
+      pedix-parser.ts            ← extras de "Detalles", entrega/pago/cupón/descuento/origen
       meta-ads-parser.ts         ← MetaAdsFilaDetalle, conjuntosDetectados, parseNumeroOpcional
       format.ts, export.ts
   components/
@@ -707,14 +782,22 @@ src/
     ui/index.tsx
 supabase/
   migrations/
-    ... (001–038 aplicadas, ver sección 4 — ninguna nueva desde entonces)
+    ... (001–041 aplicadas, ver sección 4)
 ```
 
 ---
 
 ## 10. DATOS REALES DE ROYALTY (contexto de negocio)
 
-**⚠️ Esta sección tiene datos financieros semanales verificados hasta fines de junio 2026 — desactualizados desde entonces. Para cifras de rentabilidad actuales, consultar el dashboard/Evolución directamente en vez de confiar en lo escrito acá.**
+**Foto al 11-oct-2026 (datos hasta el finde del 2–4 oct; última semana cerrada: 25–27 sep).** Para cifras actuales, consultar el dashboard o preguntarle al socio.
+- **Pedidos:** 1.723 desde el 26-abr. 93% delivery / 7% retiro; 61% transferencia / 39% efectivo; 93,7% de los pedidos entra entre 19:00 y 22:30 (la misma franja de la campaña de Meta). Descuentos totales: $2.256.000. Nunca se usó un cupón.
+- **Clientes:** 1.295 únicos; **81,7% compró una sola vez**; de los nuevos vuelve ~10–15% a los 30 días (cohortes maduras, sin las infladas de abr-may); mediana de 23 días de la 1ra a la 2da compra. El 55–70% de los pedidos de cada semana es de un cliente nuevo. Desde la caída de WhatsApp (15-sep): clientes que vuelven/semana 23 → 18; nuevos estables ~30.
+- **Delivery (18 semanas con cadetes cargados):** −$2.183.500 (~$121k/semana) = margen de envíos −$482k − complemento a la base mínima $1.340k (61%) − empresa $361,5k. ~60% de las jornadas se paga al mínimo; 4,3–4,8 cadetes por noche para 16–20 pedidos con envío.
+- **Gastos operativos cargados:** solo publicidad (~$220k–$400k/semana) y sueldos (~$360k–$390k/semana) + 1 "otros". Sin alquiler/servicios/impuestos.
+- **Carta:** King es el que más deja por unidad ($11.697, margen 58,5%); Royal simple el de mejor % (68,8%) pero menos pesos; Imperial con margen bajo (53,6%) por la suba del Danbo (+84% el 15-ago); promos Duo ~60% de margen; PROMO 2x1 Royal 41,4% (activa en el sistema, sin ventas en las últimas 4 semanas). Carne $12.500/kg.
+- **Diagnóstico del socio (8-oct):** negocio "en serrucho": volumen bajo el piso de costos fijos, promo 2x1 de margen bajo y pérdida del canal gratis de WhatsApp.
+
+**⚠️ Lo que sigue son datos históricos de junio–julio, desactualizados:**
 
 **Historial:** finales de abril a 30 junio 2026. ~900+ pedidos totales (dato de esa fecha).
 
@@ -730,7 +813,7 @@ supabase/
 
 **Delivery:** ronda los -$120.000 a -$180.000/semana en las semanas verificadas.
 
-**Merma:** el módulo está construido y deployado; a la fecha del testing de esta sesión seguía sin conteos de stock cargados para las semanas revisadas.
+**Merma:** el módulo está construido y deployado, pero **Lucas no lo usa por ahora** (11-oct) — sin conteos de stock cargados. El Analista lo excluye.
 
 **Ingredientes controlados de stock:** Carne (48.9% del costo), Cheddar (11.0%), Papas fritas Buttler (10.6%), Panes de papa (8.3%) — ~79% del costo total (dato de junio, no reverificado).
 
@@ -750,7 +833,7 @@ supabase/
 | SheetJS / import dinámico en React | Causa errores de hidratación. CSV puro sin dependencias |
 | `new Date()` en JSX directamente | Mismatch servidor/cliente |
 | Cierres de Mes/Trimestre como entidades | Agregaciones de semanas cerradas |
-| CRM, CAC, LTV, cohortes avanzadas | Fuera de scope |
+| CRM, CAC, LTV, cohortes avanzadas | Fuera de scope. **Excepción (11-oct):** las cohortes de recompra (a 30/60 días) SÍ se implementaron en el Analista, a pedido explícito de Lucas |
 | Dashboard de empleados como vista reducida del admin | Rutas separadas, datos distintos |
 | Linkear `equipo` con `usuarios` | Conceptos deliberadamente separados |
 | Montos en pesos en `metas_equipo.descripcion` | Viola principio 2.10 |
@@ -769,6 +852,12 @@ supabase/
 | **Agregar umbrales configurados (bandas de margen, publicidad máxima) al texto del Informe mensual** | Evaluado y ofrecido; Lucas decidió que no hace falta por ahora — el informe se queda puramente objetivo/sin interpretación (ver sección 16 si se retoma) |
 | **Permitir borrar cualquier producto sin restricción** | Rompería la congelación histórica (principio 2.1/2.2) si el producto tiene ventas o consumo real. Se optó por chequear actividad real antes de borrar y bloquear con mensaje claro si tiene — ver `eliminarProducto()`, sección 8 y 2.1 |
 | **Copiar los alias de `mapeo_pedix` al duplicar un producto** | Son específicos del nombre que usa Pedix para el producto ORIGINAL, y `nombre_pedix` tiene restricción de unicidad — copiarlos generaría conflicto o ambigüedad de importación |
+| **Guardar ficha/memoria/eventos del Analista en `configuracion`** | `configuracion` tiene `empleado_read`: se filtraría estrategia y presupuesto. Tabla propia admin-only `analista_conocimiento` |
+| **Informe obligatorio antes de poder chatear** | Para debatir una idea, Lucas necesita hablar directo. Modo `charla` sin informe previo |
+| **Usar el horario de los pedidos para medir el efecto de los anuncios** | El 93,7% de los pedidos entra en la misma franja de la campaña (19–22:30): no hay grupo de control. Se mide con experimentos (cupón propio, semanas o noches sin pauta, `antes_y_despues`) |
+| **`supabase db push` para aplicar migraciones** | La tabla de historial del CLI está vacía (todo se aplicó por SQL editor) → re-ejecutaría 001–041. Se usa `supabase db query -f` en transacción |
+| **Sonnet para el chat del Analista** | Debatir estrategia necesita el modelo más fuerte; con el contexto cacheado, Opus 5.5 sale ~USD 0,3–0,5 la primera respuesta y menos las repreguntas |
+| **Incluir merma en el Analista** | Lucas no usa la función de stock por ahora (11-oct) |
 
 ---
 
@@ -799,6 +888,11 @@ supabase/
 | **Semanas del mes que todavía no arrancaron aparecían en el Informe mensual con todo en cero** | `decomponerMesEnSemanas()` incluía semanas futuras del rango del mes seleccionado | `generarInformeMensual()` filtra `s.desde <= hoyLocal` antes de armar el informe |
 | **Teléfonos de clientes exportados sin código de país** | Primera versión de `normalizarCelularArg` solo tomaba los últimos 10 dígitos, descartando `+54` | Reescrito para reconstruir el formato internacional completo `+549...`, validado contra ~1000 números reales de producción (99.1% de cobertura) |
 | **"Application error" en el navegador tras correr `npx next build`** | `next build` corrió mientras `npm run dev` seguía activo — ambos comparten la carpeta `.next` y quedó en un estado mixto (chunks de dev y de producción mezclados) | `pkill -f "next dev"`, `rm -rf .next`, relevantar `npm run dev` limpio. No correr build y dev en paralelo sobre el mismo `.next` |
+| **Analista: viajes de cadetes leídos como pedidos** | ~1,4 viajes por pedido con envío hacían pensar en datos inconsistentes | Confirmado por Lucas: un viaje es una unidad de distancia (simple = 1, doble = 2). Modelo y descomposición exacta en `construirDelivery` |
+| **Analista: resultado de delivery positivo en el total** | Noches con envíos cobrados pero sin jornadas de cadetes cargadas (hasta jul) contaban como ganancia pura | Las series de delivery solo usan noches con cadetes cargados; las otras se informan aparte (`nochesConEnviosSinCadetesCargados`) |
+| **Analista: series de clientes arrancaban en junio y sin la última semana** | Usaban la ventana de semanas cerradas | Ventana propia (`ventanaClientes`): 26 semanas hasta el último domingo importado en negocio/charla |
+| **Parser Pedix: candidato `'envío'` para tipo de entrega** | Por substring podía enganchar "Cargos Envío" | Candidatos exactos primero ("forma de entrega", "método de pago") y sin `'envío'` |
+| **El modelo dudaba del año de una fecha** | Sin "hoy" en el prompt, interpretó "sábado 3-oct" como 2024 | `bloqueConocimiento` incluye `HOY` en hora ARG en cada turno |
 | **`git push` fallaba con "could not read Username" / "Invalid username or token"** | No había ningún token de GitHub accesible desde el entorno de Claude Code (ni en el keychain, ni en `~/.git-credentials`, ni `~/.netrc`) | Se instaló `gh` CLI (`brew install gh`) y Lucas hizo `gh auth login` (browser/device flow, Claude nunca vio el token) + `gh auth setup-git`. Desde entonces `git push` funciona directo — ver sección 1 |
 
 ---
@@ -912,7 +1006,10 @@ No hay una etapa grande sin especificar pendiente. Lo que sigue es operar lo ya 
 - ¿Extender el filtro de `obtenerGastosPeriodo` para cubrir lunes-jueves además de Vie-Dom?
 - ¿Agregar los umbrales configurados (`alerta_margen_minimo`, `alerta_publicidad_maxima`, bandas de margen, récords históricos) al texto del Informe mensual, para que la IA tenga la propia vara de medir de Lucas en vez de tener que inferirla? Ofrecido esta sesión, Lucas dijo que por ahora no hace falta.
 - ¿Mover los umbrales de segmentación de `/clientes/exportar` (14 y 45 días, hoy hardcodeados) a `configuracion`, como el resto de los umbrales del sistema?
-- ¿Vale la pena registrar en base cada difusión de WhatsApp enviada (grupo, fecha, cantidad), para poder cruzarlo después con si esos clientes volvieron a comprar? Hoy `/clientes/exportar` es de solo lectura/exportación, no deja rastro.
+- ¿Vale la pena registrar en base cada difusión de WhatsApp enviada (grupo, fecha, cantidad), para poder cruzarlo después con si esos clientes volvieron a comprar? Hoy `/clientes/exportar` es de solo lectura/exportación, no deja rastro. (Más relevante ahora con la comunidad Royal Family.)
+- **Experimento de campaña (propuesto por el socio, NO decidido):** mover el presupuesto de Meta del viernes (~USD 50) a miércoles-jueves con anuncios a la landing de la Royal Family; viernes sin pauta, sábado y domingo igual; cupón propio de la comunidad en Pedix; 4 findes; medir con `antes_y_despues` y comparando viernes contra sábado/domingo. Si Lucas lo decide, el socio lo anota en memoria.
+- **Analista:** probar la UI con la sesión real de Lucas; que el contexto marque `sin_datos` en semanas con 0 pedidos; migrar el loop viejo de "Generar recomendaciones" a Opus 5.5 (subir `max_tokens`: el thinking cuenta).
+- **Filas basura en `ingredientes_costos`** (sección 0.A): sigue pendiente decidir con Lucas cómo limpiarlas. El catálogo del Analista resuelve con la misma regla y hoy da valores sanos, pero es frágil.
 
 ---
 
@@ -944,10 +1041,16 @@ No hay una etapa grande sin especificar pendiente. Lo que sigue es operar lo ya 
 | **Eliminar producto sin historial real (con bloqueo si tiene ventas/consumo)** | ✅ **Completo esta sesión** |
 | **Push a GitHub configurado (`gh` CLI autenticado) — Claude Code puede pushear solo** | ✅ **Completo esta sesión** |
 | Reimportar Meta Ads semanalmente con el CSV semanal | ⏳ En curso (operación regular) |
-| Continuar midiendo merma — cargar conteos reales de los 4 ingredientes controlados | ⏳ En curso (operación regular) |
+| Continuar midiendo merma — cargar conteos reales de los 4 ingredientes controlados | ⏸️ Pausado — Lucas no usa la función por ahora (11-oct) |
 | Evaluar módulo de stock con datos reales (¿ajustar umbrales del semáforo?) | ⏳ Pendiente, depende de más semanas de medición |
 | Reimportar semanas históricas cerradas desde Meta Ads (procedimiento 15.5) | ⏳ Pendiente — acción de Lucas, necesita CSV históricos y tipo de cambio de cada semana |
 | Operación semanal (cierres de período, evaluación de decisiones del Laboratorio) | ⏳ En curso — ver `/dashboard` → Evolución para el estado actualizado, no verificado en esta sesión |
+| Laboratorio: "Tu Analista" (informe + chat agéntico + herramientas) | ✅ Completo (7-oct) |
+| Analista → "Tu socio": modo charla, ficha + memoria + eventos admin-only, recompra/cohortes, horario, cadetería descompuesta, entrega/pago/cupones | ✅ Completo (11-oct, migración 041) |
+| Analista: catálogo vigente, gastos por categoría, simulador de precios/costos | ✅ Completo (11-oct) |
+| Supabase CLI con sesión — Claude Code puede aplicar migraciones | ✅ Completo (11-oct) |
+| Probar la UI del socio con la sesión real de Lucas | ⏳ Pendiente |
+| Datos que debe completar Lucas (gastos faltantes, precio Coca, semana 28-ago, anuncios de mayo) | ⏳ Pendiente — ver sección 0 |
 | Próxima etapa grande de funcionalidad nueva | ⏳ Sin especificar (sección 16) — conversar con Lucas primero |
 
 ---
@@ -978,6 +1081,22 @@ No hay una etapa grande sin especificar pendiente. Lo que sigue es operar lo ya 
 - `src/app/(admin)/stock/actions.ts` — `obtenerAnalisisMerma()`, fórmula con unidades mixtas
 - `src/app/(empleado)/panel/actions.ts` — patrón de "calcular completo, exponer solo lo seguro"
 - `src/middleware.ts` — autenticación, roles, chequeo de `activo`, `adminRoutes`
+- **Analista:** `src/lib/analisis/analisis-negocio.ts`, `clientes-operacion.ts`, `catalogo.ts`, `tipos.ts`; `src/lib/laboratorio/prompts.ts`, `tools.ts`, `conocimiento.ts`; `src/app/(admin)/laboratorio/chat/route.ts`, `analista-actions.ts`, `AnalistaTab.tsx`
+
+### Aplicar migraciones (desde el 11-oct, con Supabase CLI):
+1. Chequeos de solo lectura antes (estado actual, nombres de constraints, que la migración no esté ya aplicada):
+   `npx supabase db query --linked --project-ref xdnpfswnxmpnzztjnsme "select …"`
+2. Aplicar envuelta en transacción (si algo falla, no queda nada a medias):
+   `{ echo "BEGIN;"; cat supabase/migrations/0NN_x.sql; echo; echo "COMMIT;"; } > /tmp/tx.sql`
+   `npx supabase db query --linked --project-ref xdnpfswnxmpnzztjnsme -f /tmp/tx.sql`
+3. Verificar con queries de solo lectura.
+- Correrlo desde fuera del repo (ej. `cd /tmp`) para que el CLI no busque una carpeta `supabase/` de configuración local.
+- **Nunca `supabase db push`** (re-ejecutaría todo). Proyecto correcto: **Royalty** `xdnpfswnxmpnzztjnsme`; no tocar "Vive de Servir".
+- Si dice `AccessTokenRequiredError`, la sesión venció: Lucas corre `npx supabase login` en su terminal (el CLI no puede hacer login desde la terminal no interactiva de Claude Code).
+- Si una migración agrega columnas que el código inserta, aplicarla ANTES de pushear.
+
+### Probar el Analista sin la sesión de Lucas:
+Compilar los módulos con `tsc` (module commonjs, outDir en el scratchpad, `paths` `@/*`), resolver `@/` con un hook de `Module._resolveFilename`, y correr con `NODE_PATH=node_modules` y las claves de `.env.local`: `construirAnalisisCompleto(admin, { tipo: 'charla', a: últimaSemanaCerrada }, …)`, `ejecutarTool(...)` y una réplica del loop del route. Cuesta ~USD 0,3–0,5 por charla. Si la prueba hace que el asesor llame `recordar`, borrar después esas notas de `analista_conocimiento`.
 
 ### Variables de entorno necesarias:
 ```
@@ -1044,3 +1163,8 @@ Confirmar con `git ls-remote origin main` que GitHub tiene el commit. Si lo tien
 23. **Reabrir una semana (`eliminarCierre()`) no recalcula nada solo** — borra el snapshot y listo. Si Lucas reabre para corregir algo, tiene que efectivamente corregir el dato (gasto, importación, etc.) y volver a apretar "Cerrar semana" — si no, la semana queda sin snapshot hasta que la vuelva a cerrar.
 24. **La navegación por semanas del dashboard (← / →) usa `startTransition`** y puede "lagear" visiblemente si se hacen varios clicks rápidos seguidos (ver sección 3) — es un comportamiento preexistente de React, no algo introducido esta sesión, pero conviene saberlo antes de automatizar clicks o de asumir que la UI está sincronizada de inmediato tras navegar.
 25. **`eliminarProducto()` no tiene un `exigirAdmin()` explícito** (como tampoco lo tienen `crearProducto`/`actualizarProducto`/`duplicarProducto` en el mismo archivo) — se apoya en que `productos` y `productos_precios` tienen RLS `admin_full_access` (migración 005) más el gate de ruta `(admin)`. Coherente con el resto del archivo, pero si en algún momento se refactoriza para agregar `exigirAdmin()` en otros módulos, valdría hacerlo acá también por consistencia.
+26. **El contexto del Analista pesa ~79.000 caracteres (~22k tokens)** (32k son del catálogo). Va cacheado, pero si crece mucho (más productos, más semanas) revisar costo y latencia. Una charla con herramientas tarda 60–90 s; el límite del route es 300 s.
+27. **El catálogo usa la misma resolución de vigencia que el importador** y por lo tanto hereda la fragilidad de las filas basura de `ingredientes_costos` (sección 0.A). Si un costo del catálogo se ve absurdo, revisar esa tabla antes que el código.
+28. **El socio puede escribir en la base** (solo `recordar` → notas en `analista_conocimiento`). Lucas las ve y borra desde la UI. No agregar herramientas que escriban en tablas operativas o financieras.
+29. **`gastos_operativos` solo tiene publicidad y sueldos:** el beneficio neto del sistema puede estar sobreestimado. El contexto lo advierte (`historia.gastosNota`).
+30. **Precios de carta pueden estar desactualizados respecto de Pedix** (ej. Lata de coca $3.000 vs $3.500 cobrado). El margen teórico del catálogo usa el precio cargado; el margen real usa el cobrado.
