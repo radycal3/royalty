@@ -40,7 +40,8 @@ import {
   ventanaClientes,
   type PedidoLiviano,
 } from './clientes-operacion';
-import { leerEventos } from '@/lib/laboratorio/conocimiento';
+import { hoyArgentina, leerEventos } from '@/lib/laboratorio/conocimiento';
+import { construirCatalogo } from './catalogo';
 
 const esPromo = (nombre: string) => /^\s*promo/i.test(nombre || '');
 const r0 = (n: number) => Math.round(n || 0);
@@ -407,13 +408,14 @@ async function construirHistoria(
   const desdeVentana = periodos.length ? periodos[0].desde : hastaRef;
 
   // 2) En paralelo: promo por semana, repetidores % por semana, publi por semana, decisiones.
-  const [promoPorPeriodo, repPorViernes, publiPorSemana, decisiones, publiGastos, delivery] = await Promise.all([
+  const [promoPorPeriodo, repPorViernes, publiPorSemana, decisiones, publiGastos, delivery, gastosPorPeriodo] = await Promise.all([
     promoPorPeriodoMap(admin, periodoIds),
     repetidoresPorSemana(admin, desdeVentana, hastaRef, primerPedido, activas),
     publiHistoria(admin, desdeVentana, hastaRef),
     decisionesHistoria(admin),
     publicidadPorSemana(admin, ventanaCli.desde, ventanaCli.hasta),
     construirDelivery(admin, pedidosLivianos, ventanaCli.desde, ventanaCli.hasta),
+    gastosPorPeriodoMap(admin, periodoIds),
   ]);
 
   const semanas: HistoriaSemana[] = periodos.map((p: any) => {
@@ -436,11 +438,26 @@ async function construirHistoria(
       resultadoDelivery: r0(p.resultado_delivery),
       pctVentasRepetidores: repPorViernes.has(p.desde) ? repPorViernes.get(p.desde)! : null,
       promo,
+      gastos: gastosPorPeriodo.get(p.id) || null,
     };
   });
 
+  // Qué categorías tienen gastos cargados y cuáles no: si hay costos reales que
+  // no se registran (alquiler, servicios…), el beneficio neto está sobreestimado.
+  const conRegistros = new Set<string>();
+  for (const g of gastosPorPeriodo.values()) for (const [cat, total] of Object.entries(g)) if (total > 0) conRegistros.add(cat);
+  const sinRegistros = CATEGORIAS_GASTO.filter((c) => !conRegistros.has(c));
+  const gastosNota =
+    `En estas semanas hay gastos operativos cargados en: ${[...conRegistros].join(', ') || 'ninguna categoría'}. ` +
+    (sinRegistros.length
+      ? `NO hay ningún gasto cargado en: ${sinRegistros.join(', ')}. Si el negocio tiene esos costos (alquiler, luz, gas, internet, contador, impuestos, packaging fuera de receta…) y no se cargan, ` +
+        'el beneficio neto que muestra el sistema es MAYOR que el real: preguntale a Lucas antes de concluir sobre rentabilidad. '
+      : '') +
+    'El packaging que forma parte de la receta (ej. la caja) ya está en el costo de ingredientes. La cadetería no está acá: va por resultadoDelivery.';
+
   return {
     semanas,
+    gastosNota,
     publiPorSemana,
     decisiones,
     ventanaClientesYOperacion: ventanaCli,
@@ -449,6 +466,22 @@ async function construirHistoria(
     delivery,
     entregaPago: construirEntregaPago(pedidosLivianos, ventanaCli.desde, ventanaCli.hasta),
   };
+}
+
+const CATEGORIAS_GASTO = ['publicidad', 'packaging', 'sueldos', 'servicios', 'impuestos', 'otros'];
+
+// Gastos por categoría de cada semana cerrada (snapshot periodos_gastos).
+async function gastosPorPeriodoMap(admin: SupabaseClient, periodoIds: string[]): Promise<Map<string, Record<string, number>>> {
+  const out = new Map<string, Record<string, number>>();
+  if (periodoIds.length === 0) return out;
+  const { data } = await admin.from('periodos_gastos').select('periodo_id, categoria, total').in('periodo_id', periodoIds);
+  for (const row of data || []) {
+    const e = out.get((row as any).periodo_id) || {};
+    const cat = (row as any).categoria as string;
+    e[cat] = r0((e[cat] || 0) + (Number((row as any).total) || 0));
+    out.set((row as any).periodo_id, e);
+  }
+  return out;
 }
 
 async function promoPorPeriodoMap(admin: SupabaseClient, periodoIds: string[]): Promise<Map<string, { venta: number; beneficio: number; unidades: number }>> {
@@ -572,8 +605,8 @@ export async function construirAnalisisCompleto(
 
   // "La película": serie semanal + promos + publi + decisiones + eventos. Solo
   // en el contexto congelado (informe/estratégico), no en las herramientas lite.
-  const [historia, eventos] = opts.historia === false
-    ? [undefined, undefined]
+  const [historia, eventos, catalogo] = opts.historia === false
+    ? [undefined, undefined, undefined]
     : await Promise.all([
         construirHistoria(
           admin, scope.a.hasta, SEMANAS_HISTORIA, primerPedido, activas, pedidosLivianos,
@@ -582,15 +615,16 @@ export async function construirAnalisisCompleto(
           ventanaClientes(pedidosLivianos, scope.a.hasta, SEMANAS_HISTORIA, scope.tipo === 'negocio' || scope.tipo === 'charla')
         ),
         construirEventos(admin),
+        construirCatalogo(admin, hoyArgentina()),
       ]);
 
   if (scope.tipo === 'comparacion') {
     const periodoB = await analizarPeriodo(admin, scope.b, productosMap, idsHamburguesa, primerPedido, activas, opts);
     const deltas = construirDeltas(periodoA.financiero, periodoB.financiero);
-    return { generadoEn, scopeTipo: 'comparacion', periodoA, periodoB, deltas, tendencia, findes, historia, eventos };
+    return { generadoEn, scopeTipo: 'comparacion', periodoA, periodoB, deltas, tendencia, findes, historia, eventos, catalogo };
   }
 
-  return { generadoEn, scopeTipo: scope.tipo, periodoA, tendencia, findes, historia, eventos };
+  return { generadoEn, scopeTipo: scope.tipo, periodoA, tendencia, findes, historia, eventos, catalogo };
 }
 
 function contarViernes(desde: string, hasta: string): number {

@@ -169,6 +169,7 @@ export type HistoriaSemana = {
   resultadoDelivery: number;
   pctVentasRepetidores: number | null;
   promo: PromoSemana | null;
+  gastos: Record<string, number> | null;  // gastos operativos por categoría (snapshot del cierre), null si el cierre no tiene detalle
 };
 
 export type PubliSemanaHist = {
@@ -300,6 +301,7 @@ export type EntregaPago =
 
 export type Historia = {
   semanas: HistoriaSemana[];      // orden cronológico: más vieja → más nueva
+  gastosNota?: string;            // qué categorías de gasto tienen registros y cuáles NO (posibles costos no cargados)
   publiPorSemana: PubliSemanaHist[];
   decisiones: DecisionHist[];     // decisiones pasadas con su resultado (memoria)
   // Los bloques de clientes y operación usan TODOS los datos importados (no solo
@@ -309,6 +311,40 @@ export type Historia = {
   horario?: HorarioResumen;
   delivery?: DeliveryResumen;
   entregaPago?: EntregaPago;
+};
+
+// ─── CATÁLOGO VIGENTE (precios, recetas, costos de ingredientes) ───────────
+export type ProductoCatalogo = {
+  nombre: string;
+  categoria: string;
+  activo: boolean;
+  precio: number | null;            // precio de carta vigente hoy
+  precioDesde: string | null;
+  precioAnterior: number | null;
+  costoReceta: number | null;       // costo teórico de hoy con los costos vigentes
+  margenTeorico: number | null;     // % (precio − costo) / precio
+  receta: { ingrediente: string; cantidad: number; unidad: string; costo: number | null }[];
+  ventasUltimasSemanas: { unidadesPorSemana: number; precioPromedioCobrado: number | null };
+};
+export type IngredienteCatalogo = {
+  nombre: string;
+  unidadCompra: string;
+  unidadReceta: string;
+  factorConversion: number;
+  costoUnidadCompra: number | null;
+  vigenteDesde: string | null;
+  costoAnterior: number | null;
+  anteriorDesde: string | null;
+  variacionPct: number | null;      // actual vs. anterior
+  costoUnidadReceta: number | null;
+  productosQueLoUsan: number;
+};
+export type Catalogo = {
+  fechaCostos: string;
+  ventasDe: { desde: string; hasta: string; semanas: number } | null;
+  nota: string;
+  productos: ProductoCatalogo[];
+  ingredientes: IngredienteCatalogo[];
 };
 
 // Hechos del mundo real que los números no cuentan (cargados por el admin):
@@ -335,4 +371,5 @@ export type AnalisisCompleto = {
   findes: number;                    // cantidad de fines de semana operativos en el período A
   historia?: Historia;               // "la película": serie semanal + promos + publi + decisiones
   eventos?: EventoNegocio[];         // hechos del mundo real cargados por el admin
+  catalogo?: Catalogo;               // precios, recetas y costos vigentes hoy
 };

@@ -8,7 +8,8 @@ import type Anthropic from '@anthropic-ai/sdk';
 import { buildRangoSemana, periodoDeJS } from '@/lib/dashboard/rangos';
 import { construirAnalisisCompleto } from '@/lib/analisis/analisis-negocio';
 import { cargarPedidosLivianos, primerPedidoDe } from '@/lib/analisis/clientes-operacion';
-import { agregarNota } from '@/lib/laboratorio/conocimiento';
+import { agregarNota, hoyArgentina } from '@/lib/laboratorio/conocimiento';
+import { simularEscenario, type CambioEscenario } from '@/lib/analisis/catalogo';
 
 function fmtFecha(d: Date): string {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
@@ -96,6 +97,44 @@ export const TOOLS: Anthropic.Beta.BetaTool[] = [
     },
   },
   {
+    name: 'simular_escenario',
+    description:
+      'Simula el impacto en el beneficio BRUTO semanal de cambiar precios de productos y/o costos de ingredientes, usando las recetas y costos vigentes y el volumen real de las últimas semanas cerradas. Devuelve por producto: precio, costo, margen unitario y % antes/después, beneficio semanal antes/después, cuánto puede caer el volumen antes de que una suba de precio deje de convenir, y qué precio mantiene el margen % si sube un costo. Usala para "¿y si subo el King $1.000?", "¿qué pasa si la carne sube 15%?", "¿cuánto gano si la 2x1 pasa a $X?". Podés combinar varios cambios en una sola simulación.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        cambios: {
+          type: 'array',
+          description: 'Lista de cambios. Precio: {"tipo":"precio","producto":"King","nuevoPrecio":15000} o con "variacionPct": 10. Costo: {"tipo":"costo","ingrediente":"Carne","variacionPct":15} o con "nuevoCosto" (por unidad de compra).',
+          items: {
+            type: 'object',
+            properties: {
+              tipo: { type: 'string', enum: ['precio', 'costo'] },
+              producto: { type: 'string', description: 'Nombre del producto (para tipo precio)' },
+              ingrediente: { type: 'string', description: 'Nombre del ingrediente (para tipo costo)' },
+              nuevoPrecio: { type: 'number' },
+              nuevoCosto: { type: 'number', description: 'Por unidad de compra' },
+              variacionPct: { type: 'number', description: 'Ej. 10 = +10%, -5 = -5%' },
+            },
+            required: ['tipo'],
+          },
+        },
+        semanasBase: { type: 'number', description: 'Semanas cerradas para el volumen base (default 4)' },
+      },
+      required: ['cambios'],
+    },
+  },
+  {
+    name: 'detalle_gastos_semana',
+    description:
+      'Lista cada gasto operativo cargado en una semana operativa (Vie→Jue) con categoría, tipo (fijo/variable), monto y nota. Usala para "¿en qué se fue la plata esa semana?", "¿qué incluye el sueldo de esa semana?".',
+    input_schema: {
+      type: 'object',
+      properties: { fecha: { type: 'string', description: 'Fecha YYYY-MM-DD dentro de la semana' } },
+      required: ['fecha'],
+    },
+  },
+  {
     name: 'recordar',
     description:
       'Anota algo en tu MEMORIA permanente (la vas a ver en todas las conversaciones futuras). Usala SOLO para: una decisión que Lucas tomó, un experimento que arranca (qué, desde cuándo, qué métrica mirar, cuándo evaluarlo), un dato del negocio que Lucas te contó y que no está en la ficha, o una conclusión importante a la que llegaron. Escribila corta, autocontenida y con fechas concretas. NO la uses para resumir la charla.',
@@ -125,6 +164,10 @@ export async function ejecutarTool(admin: SupabaseClient, name: string, input: a
       return antesYDespues(admin, input.fecha, input.semanas ?? 4);
     case 'adquisicion_semana':
       return adquisicionSemana(admin, input.fecha);
+    case 'simular_escenario':
+      return simularEscenario(admin, hoyArgentina(), (input.cambios || []) as CambioEscenario[], input.semanasBase ?? 4);
+    case 'detalle_gastos_semana':
+      return detalleGastosSemana(admin, input.fecha);
     case 'recordar': {
       const r = await agregarNota(admin, String(input.nota || ''), 'asesor');
       return 'error' in r ? { error: r.error } : { ok: true, anotado: r.nota.texto, fecha: r.nota.fecha };
@@ -398,5 +441,26 @@ async function adquisicionSemana(admin: SupabaseClient, fecha: string) {
     pctNuevosQueVolvieron: nuevos.length ? r1((volvieron.length / nuevos.length) * 100) : 0,
     medianaDiasHastaVolver: diasHastaVolver.length ? diasHastaVolver[Math.floor(diasHastaVolver.length / 2)] : null,
     diasTranscurridosDesdeLaSemana: diasEntre(sumarDias(s, 2), ultimaFecha),
+  };
+}
+
+async function detalleGastosSemana(admin: SupabaseClient, fecha: string) {
+  const viernes = semanaDe(fecha);
+  const jueves = sumarDias(viernes, 6);
+  const { data } = await admin
+    .from('gastos_operativos')
+    .select('fecha, categoria, tipo, monto, nota')
+    .gte('fecha', viernes)
+    .lte('fecha', jueves)
+    .order('fecha');
+  const gastos = (data || []).map((g: any) => ({ fecha: g.fecha, categoria: g.categoria, tipo: g.tipo, monto: r0(Number(g.monto)), nota: g.nota || null }));
+  const porCategoria: Record<string, number> = {};
+  for (const g of gastos) porCategoria[g.categoria] = (porCategoria[g.categoria] || 0) + g.monto;
+  return {
+    semana: `${viernes} a ${jueves}`,
+    total: gastos.reduce((a, g) => a + g.monto, 0),
+    porCategoria,
+    gastos,
+    nota: 'La cadetería no está acá (va por cadetes_jornadas / resultado delivery). Ingredientes y packaging de receta van por costo de ingredientes.',
   };
 }
