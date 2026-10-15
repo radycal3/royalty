@@ -31,6 +31,16 @@ Sos el nuevo Claude (o Claude Code) que continúa el desarrollo de ROYALTY, el s
 
 ---
 
+## 0.0 CAMBIO 15-OCT-2026: MES / TRIMESTRE / AÑO VUELVEN A SER POR FECHA (CALENDARIO)
+
+Decisión de Lucas, **revierte** el "Mes = span de sus semanas operativas" de la sección 0.A. Motivo: con el criterio operativo, agosto perdía el sábado 1 y el domingo 2 (semana del viernes 31-jul, la mejor del año) y pasaba de +$288.882 a +$77.583. Lucas quiere que cada día facture en el mes de su fecha.
+- `src/lib/dashboard/rangos.ts`: `rangoOperativo()` reemplazado por `rangoCalendario()` (1 al último día del mes/trimestre/año). La **semana** sigue siendo operativa Vie→Jue y los cierres no cambian.
+- Ventas, gastos, cadetes y consumo interno ya filtraban por `fecha`, así que el mes es el P&L de esos días. Un gasto cae en el mes de SU fecha (ej. la publicidad de la semana del 31-jul está fechada el viernes → julio).
+- Header del dashboard: el contador "N fines de semana operativos" pasó a "N días de venta (vie-sáb-dom)" (`contarDiasVenta`), porque un finde puede quedar partido.
+- Consecuencia: el mes ya **no** es la suma exacta de sus semanas cerradas, ni coincide con el total del "Informe para IA" (que sigue desglosando por semanas cuyo viernes cae en el mes). Es esperado.
+
+---
+
 ## 0.A CAMBIOS SESIÓN 6–7 OCT 2026
 
 **Fix mayor de confiabilidad de ventas: captura de "extras con precio" de Pedix.**

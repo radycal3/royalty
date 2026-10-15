@@ -76,15 +76,16 @@ type RankingTab = 'vendidos' | 'beneficio' | 'margen';
 
 // ─── Subcomponentes ──────────────────────────────────────────────────────
 
-// Cuenta los fines de semana operativos (viernes) dentro de un rango. Un mes
-// puede tener 4 o 5 — por eso comparar totales mensuales directamente puede
-// engañar (un mes con 5 findes "crece" vs uno de 4 sin vender más por finde).
-function contarFindes(desde: string, hasta: string): number {
+// Cuenta los días de venta (Vie/Sáb/Dom) dentro de un rango. Un mes calendario
+// puede tener 12 a 15 (y un finde puede quedar partido entre dos meses) — por
+// eso comparar totales mensuales directamente puede engañar.
+function contarDiasVenta(desde: string, hasta: string): number {
   let n = 0;
   const d = new Date(desde + 'T12:00:00');
   const end = new Date(hasta + 'T12:00:00');
   while (d <= end) {
-    if (d.getDay() === 5) n++;
+    const dow = d.getDay();
+    if (dow === 5 || dow === 6 || dow === 0) n++;
     d.setDate(d.getDate() + 1);
   }
   return n;
@@ -2546,11 +2547,11 @@ export default function DashboardPage() {
         </div>
 
         {kpis && (rango.tipo === 'mes' || rango.tipo === 'trimestre' || rango.tipo === 'año') && (() => {
-          const nAct = contarFindes(rango.desde, rango.hasta);
-          const nAnt = kpis.rangoAnterior ? contarFindes(kpis.rangoAnterior.desde, kpis.rangoAnterior.hasta) : null;
+          const nAct = contarDiasVenta(rango.desde, rango.hasta);
+          const nAnt = kpis.rangoAnterior ? contarDiasVenta(kpis.rangoAnterior.desde, kpis.rangoAnterior.hasta) : null;
           return (
             <div data-print="hidden" className="mt-1 text-center text-xs text-text-muted">
-              {nAct} {nAct === 1 ? 'fin de semana operativo' : 'fines de semana operativos'}
+              {nAct} {nAct === 1 ? 'día de venta' : 'días de venta'} (vie-sáb-dom)
               {nAnt !== null && nAnt !== nAct && (
                 <span className="text-warning">
                   {' · '}el período anterior tuvo {nAnt} — comparar totales no es directo

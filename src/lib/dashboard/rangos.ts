@@ -41,31 +41,13 @@ function ultimoDiaMes(year: number, month: number): number {
   return new Date(year, month + 1, 0).getDate();
 }
 
-// ─── Rango OPERATIVO ───────────────────────────────────────────────────────
-// Una "semana operativa" va de viernes a jueves (7 días): se vende Vie-Sáb-Dom
-// pero los COSTOS pueden caer cualquier día (ej. un sueldo pagado el lunes).
-// Para que ningún gasto se pierda y para que un mes sea exactamente la SUMA de
-// sus semanas, los rangos de mes/trimestre/año se arman como el span de las
-// semanas operativas cuyo VIERNES cae dentro del período calendario — el mismo
-// criterio que usa el Informe mensual (periodo_de / decomponerMesEnSemanas).
-function primerViernesEnRango(desde: Date): Date {
-  const d = new Date(desde);
-  const add = ((5 - d.getDay()) + 7) % 7; // getDay 5 = viernes
-  d.setDate(d.getDate() + add);
-  return d;
-}
-function ultimoViernesEnRango(hasta: Date): Date {
-  const d = new Date(hasta);
-  const sub = ((d.getDay() - 5) + 7) % 7;
-  d.setDate(d.getDate() - sub);
-  return d;
-}
-function rangoOperativo(calDesde: Date, calHasta: Date): { desde: string; hasta: string } {
-  const primerVie = primerViernesEnRango(calDesde);
-  const ultimoVie = ultimoViernesEnRango(calHasta);
-  const finJueves = new Date(ultimoVie);
-  finJueves.setDate(ultimoVie.getDate() + 6); // jueves de la última semana
-  return { desde: fmt(primerVie), hasta: fmt(finJueves) };
+// ─── Mes / Trimestre / Año = CALENDARIO ────────────────────────────────────
+// Decisión de Lucas (15-oct-2026): los períodos largos van por FECHA, no por
+// semanas operativas. Si un finde cruza el cambio de mes, el viernes factura en
+// un mes y el sábado/domingo en el otro; los gastos y jornadas de cadetes caen
+// en el mes de su propia fecha. Solo la SEMANA es operativa (Vie→Jue).
+function rangoCalendario(calDesde: Date, calHasta: Date): { desde: string; hasta: string } {
+  return { desde: fmt(calDesde), hasta: fmt(calHasta) };
 }
 
 const MESES = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
@@ -109,9 +91,7 @@ export function buildRangoSemana(referencia?: Date): Rango {
 
 export function buildRangoMes(year: number, month: number): Rango {
   const hoy = new Date();
-  // Operativo: semanas cuyo viernes cae en el mes calendario. Así el mes es la
-  // suma exacta de sus semanas y coincide con el "Informe para IA".
-  const { desde, hasta } = rangoOperativo(
+  const { desde, hasta } = rangoCalendario(
     new Date(year, month, 1),
     new Date(year, month, ultimoDiaMes(year, month))
   );
@@ -129,7 +109,7 @@ export function buildRangoTrimestre(year: number, quarter: number): Rango {
   const hoy = new Date();
   const mesInicio = quarter * 3;
   const mesFin = mesInicio + 2;
-  const { desde, hasta } = rangoOperativo(
+  const { desde, hasta } = rangoCalendario(
     new Date(year, mesInicio, 1),
     new Date(year, mesFin, ultimoDiaMes(year, mesFin))
   );
@@ -147,7 +127,7 @@ export function buildRangoTrimestre(year: number, quarter: number): Rango {
 
 export function buildRangoAño(year: number): Rango {
   const hoy = new Date();
-  const { desde, hasta } = rangoOperativo(
+  const { desde, hasta } = rangoCalendario(
     new Date(year, 0, 1),
     new Date(year, 11, 31)
   );
